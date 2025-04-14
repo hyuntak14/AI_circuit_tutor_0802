@@ -1,14 +1,15 @@
 # main.py
-
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 from detector.pin_detector import PinDetector
 from ui.perspective_editor import select_and_transform
 from mapper.pin_mapper import ComponentToPinMapper
-from ui.manual_labeler import draw_and_label  # 수동 라벨러 기능
+from ui.manual_labeler import *  # 수동 라벨러 기능
 from detector.fasterrcnn_detector import FasterRCNNDetector
 from detector.location_detector import KeypointDetector  # 수정된 KeypointDetector 사용
 import cv2
 import matplotlib.pyplot as plt
-import os
+
 import numpy as np
 import tkinter as tk
 
@@ -38,36 +39,87 @@ def wait_for_next():
     root.mainloop()
 
 def modify_detections(image, detections):
-    """
-    detections: [(클래스명, confidence, bbox), ...] 리스트
-    각 객체에 대해 bounding box와 현재 클래스명을 보여주며, 
-    사용자가 새로운 클래스명을 입력하면 수정하고, 'delete'라고 입력하면 삭제하도록 함.
-    bbox는 (x1, y1, x2, y2) 형태.
-    """
-    modified = []
-    for idx, (cls_name, conf, bbox) in enumerate(detections):
-        x1, y1, x2, y2 = bbox
-        # 이미지 복사본에 현재 bbox만 강조하여 표시
+    win_name = "object change"  # 이 줄을 추가합니다
+    updated_detections = detections.copy()  # 이 줄도 추가해야 합니다
+    def draw_boxes():
         temp_img = image.copy()
-        color = class_colors.get(cls_name, (255, 255, 255))
-        cv2.rectangle(temp_img, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(temp_img, f"현재: {cls_name}", (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-        cv2.imshow("객체 수정", temp_img)
-        cv2.waitKey(1)  # 이미지가 뜨게 잠시 대기
-        print(f"[{idx}] Bounding Box: {bbox}, 현재 클래스: {cls_name}")
-        # 사용자 입력: 새 클래스명 입력 (빈 문자열이면 그대로), 'delete' 입력 시 삭제
-        user_input = input("클래스 수정 (수정할 클래스명 입력, 삭제는 'delete', 그대로는 엔터): ").strip()
-        cv2.destroyWindow("객체 수정")
-        if user_input.lower() == "delete":
-            print("해당 객체 삭제됨.")
-            continue  # 현재 객체를 리스트에 추가하지 않음
-        elif user_input != "":
-            # 새로운 클래스명으로 업데이트
-            print(f"클래스명을 '{cls_name}'에서 '{user_input}'로 수정합니다.")
-            cls_name = user_input
-        modified.append((cls_name, conf, bbox))
-    return modified
+        for idx, (cls_name, conf, bbox) in enumerate(updated_detections):
+            x1, y1, x2, y2 = bbox
+            cv2.rectangle(temp_img, (x1, y1), (x2, y2),
+                        class_colors.get(cls_name, (255, 255, 255)), 2)
+            cv2.putText(temp_img, f"[{idx}] {cls_name}", (x1, max(y1-10, 0)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        class_colors.get(cls_name, (255, 255, 255)), 2)
+        cv2.imshow(win_name, temp_img)
+
+    def prompt_action(current_class):
+        action_result = {"action": None}
+
+        def set_change():
+            action_result["action"] = "change"
+            top.destroy()
+
+        def set_delete():
+            action_result["action"] = "delete"
+            top.destroy()
+
+        def set_cancel():
+            action_result["action"] = None
+            top.destroy()
+
+        top = tk.Toplevel()
+        top.title("object change")
+        msg = f"현재 클래스: {current_class}\n어떻게 하시겠습니까?"
+        label = tk.Label(top, text=msg, font=("Arial", 12))
+        label.pack(padx=10, pady=10)
+        frame = tk.Frame(top)
+        frame.pack(padx=10, pady=10)
+        btn_change = tk.Button(frame, text="Change Class", width=12, command=set_change)
+        btn_change.grid(row=0, column=0, padx=5)
+        btn_delete = tk.Button(frame, text="Delete", width=12, command=set_delete)
+        btn_delete.grid(row=0, column=1, padx=5)
+        btn_cancel = tk.Button(frame, text="Cancel", width=12, command=set_cancel)
+        btn_cancel.grid(row=0, column=2, padx=5)
+        top.wait_window()
+
+        if action_result["action"] == "change":
+            new_class = choose_class_gui()  # manual_labeler.py에 정의된 함수
+            return new_class if new_class is not None else current_class
+        elif action_result["action"] == "delete":
+            return "delete"
+        else:
+            return None
+
+    def mouse_callback(event, x, y, flags, param):
+        # nonlocal updated_detections 제거 (리스트는 mutable 이므로 내부 항목 변경 가능)
+        if event == cv2.EVENT_LBUTTONDOWN:
+            for idx, (cls_name, conf, bbox) in enumerate(updated_detections):
+                x1, y1, x2, y2 = bbox
+                if x1 <= x <= x2 and y1 <= y <= y2:
+                    result = prompt_action(cls_name)
+                    if result == "delete":
+                        updated_detections.pop(idx)
+                    elif result is not None:
+                        updated_detections[idx] = (result, conf, bbox)
+                    break
+            draw_boxes()
+
+    cv2.namedWindow(win_name)
+    draw_boxes()
+    cv2.setMouseCallback(win_name, mouse_callback)
+
+    print("객체 수정을 위해 bounding box 내부를 클릭하세요. 수정이 끝났으면 'q' 키를 누르세요.")
+    while True:
+        key = cv2.waitKey(0) & 0xFF
+        if key == ord('q'):
+            break
+    cv2.destroyWindow(win_name)
+    return updated_detections
+
+
+
+
+
 
 def main():
     # 모델 경로 설정
