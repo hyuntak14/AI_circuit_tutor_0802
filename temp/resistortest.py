@@ -1,10 +1,12 @@
 import os
 import cv2
 import numpy as np
-from resistor_detector import ResistorEndpointDetector
+#from resistor_detector import ResistorEndpointDetector
+#from diode_detector import ResistorEndpointDetector
+from led_detector import LedEndpointDetector
 
 # 경로 설정: 테스트할 저항 이미지 파일 경로
-IMAGE_PATH = r"resistor6.jpg"
+IMAGE_PATH = r"led1.jpg"
 
 # 1) 이미지 로드
 image = cv2.imread(IMAGE_PATH)
@@ -17,7 +19,7 @@ h, w = image.shape[:2]
 bbox = (0, 0, w, h)
 
 # 3) 엔드포인트 디텍터 초기화 및 추출
-detector = ResistorEndpointDetector(visualize=True)
+detector = LedEndpointDetector(visualize=True)
 endpoints = detector.extract(image, bbox)
 if endpoints is None:
     print("엔드포인트를 검출하지 못했습니다.")

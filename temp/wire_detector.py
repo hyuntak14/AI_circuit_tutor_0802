@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import networkx as nx
-from detector.hole_detector import HoleDetector
+from hole_detector import HoleDetector
 from sklearn.cluster import DBSCAN
 from sklearn.metrics import silhouette_score
 from skimage.feature import local_binary_pattern
@@ -26,7 +26,6 @@ class WireDetector:
         self.endpoint_eps = endpoint_eps
 
     def configure_white_thresholds(self, full_image):
-        
         
         # Compute optimal adaptive threshold parameters for white wires
         gray = cv2.cvtColor(full_image, cv2.COLOR_BGR2GRAY)

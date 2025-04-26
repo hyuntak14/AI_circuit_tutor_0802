@@ -110,49 +110,62 @@ class ResistorEndpointDetector:
             maxLineGap=self.max_line_gap
         )
         pts = []
+        hough_img = cv2.cvtColor(bw, cv2.COLOR_GRAY2BGR)
         if lines is not None:
             for x3, y3, x4, y4 in lines.reshape(-1, 4):
+                cv2.line(hough_img, (x3, y3), (x4, y4), (255, 0, 0), 1)
                 pts.extend([(x3, y3), (x4, y4)])
 
-        # 10) data_pts 정의: 엔드포인트 우선, 없으면 Hough 점군 사용
-        if len(endpoints) >= 2:
-            data_pts = np.array(endpoints)
-        elif len(pts) >= 2:
-            data_pts = np.array(pts)
-        else:
-            data_pts = None
-
-        # 최장 거리 점 선택
+        # 10) 최장 거리 점 선택 (엔드포인트 우선)
+        data_pts = (np.array(endpoints) if len(endpoints) >= 2
+                    else (np.array(pts) if len(pts) >= 2 else None))
         centers = []
         if data_pts is not None:
             max_dist = -1
             p1 = p2 = None
             for i in range(len(data_pts)):
                 for j in range(i + 1, len(data_pts)):
-                    dx = data_pts[i][0] - data_pts[j][0]
-                    dy = data_pts[i][1] - data_pts[j][1]
-                    d = dx*dx + dy*dy
+                    d = (data_pts[i][0] - data_pts[j][0])**2 + \
+                        (data_pts[i][1] - data_pts[j][1])**2
                     if d > max_dist:
                         max_dist = d
                         p1, p2 = tuple(data_pts[i]), tuple(data_pts[j])
-            if p1 is not None and p2 is not None:
+            if p1 and p2:
                 centers = [p1, p2]
 
-        # 11) (생략) 시각화 코드...
+        # 11) 시각화 (6 패널 그리드)
+        def to_bgr(img):
+            return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR) if img.ndim == 2 else img.copy()
+        viz = [
+            cv2.resize(roi, (w, h)),
+            to_bgr(bw),
+            to_bgr(skel),
+            to_bgr(gray),
+            cv2.resize(hough_img, (w, h)),
+            to_bgr(gray)
+        ]
+        ep_img, cen_img = viz[3].copy(), viz[5].copy()
+        for ex, ey in endpoints:
+            cv2.circle(ep_img, (ex, ey), 3, (0, 0, 255), -1)
+        for cx, cy in centers:
+            cv2.circle(cen_img, (cx, cy), 5, (0, 255, 0), -1)
+        viz[3], viz[5] = ep_img, cen_img
+        grid = np.vstack([np.hstack(viz[:3]), np.hstack(viz[3:])])
+        if self.visualize:
+            cv2.imshow('Process Overview', grid)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
 
-        # 12) 항상 두 점을 반환
-        if len(centers) == 2:
+        # 12) 최종 엔드포인트 반환 (원본 좌표계)
+        if centers:
             return (
                 (x1 + centers[0][0], y1 + centers[0][1]),
                 (x1 + centers[1][0], y1 + centers[1][1])
             )
-        else:
-            return ((None, None), (None, None))
-
+        return None
 
     def draw(self, image: np.ndarray, endpoints: tuple,
              color=(0, 255, 0), radius=5, thickness=-1):
-        if endpoints and endpoints[0] is not None:
+        if endpoints:
             cv2.circle(image, endpoints[0], radius, color, thickness)
-        if endpoints and endpoints[1] is not None:
             cv2.circle(image, endpoints[1], radius, color, thickness)
