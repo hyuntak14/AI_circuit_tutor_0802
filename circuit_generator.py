@@ -38,14 +38,22 @@ def generate_circuit(
         pin_a, pin_b = comp['pins']
         # 가장 가까운 홀 좌표 찾기
         def nearest_net(pt):
-            # pt의 좌표를 정수로 변환
-            pt_x = int(pt[0]) if isinstance(pt[0], str) else pt[0]
-            pt_y = int(pt[1]) if isinstance(pt[1], str) else pt[1]
-            
-            return hole_to_net[min(
-                hole_to_net.keys(),
-                key=lambda h: (h[0]-pt_x)**2 + (h[1]-pt_y)**2
-            )]
+            pt_x, pt_y = pt
+            # 1) 핀 좌표 유효성 검사
+            if pt_x is None or pt_y is None:
+                raise ValueError(f"Invalid pin coordinates: {pt}")
+
+            # 2) hole_to_net 에서 None 이 포함된 key는 제외
+            valid_holes = [h for h in hole_to_net.keys() if h[0] is not None and h[1] is not None]
+            if not valid_holes:
+                raise RuntimeError("No valid hole coordinates available to match against")
+
+            # 3) 유효한 hole 중 가장 가까운 것을 선택
+            nearest = min(
+                valid_holes,
+                key=lambda h: (h[0] - pt_x)**2 + (h[1] - pt_y)**2
+            )
+            return hole_to_net[nearest]
         net1 = nearest_net(pin_a)
         net2 = nearest_net(pin_b)
         name = f"{comp['class'][0].upper()}{idx}"

@@ -21,6 +21,7 @@ import numpy as np
 # '''
 
 def toSPICE(circuit: pd.DataFrame, voltage: int, path: str):
+    circuit['value'] = circuit['value'].fillna(0).astype(int)
     # 인덱스용 num_idx 컬럼 추가
     num_c = 0
     for idx, row in circuit.iterrows():
