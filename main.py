@@ -328,6 +328,50 @@ def main():
             ) or 0.0
         else:
             comp['value'] = 10  # 또는 원하는 기본값
+    orig = warped.copy()           # “warped_raw” 가 아니라 핀 찍기 전 이미지
+    warped_raw = orig.copy()       # 이후 임시 표시용
+
+    # … (컴포넌트 핀 검출 및 pins_list 채우는 코드)
+
+    # ② Fix Pins 윈도우의 베이스 이미지는 깔끔한 orig 로
+    result_base = orig.copy()
+
+    def redraw():
+        img = result_base.copy()
+        for comp in component_pins:
+            x1,y1,x2,y2 = comp['box']
+            color = class_colors.get(comp['class'], (0,255,255))
+            cv2.rectangle(img, (x1,y1), (x2,y2), color, 2)
+            for px,py in comp['pins']:
+                cv2.circle(img, (px,py), 5, (0,255,0), -1)
+        cv2.imshow('Fix Pins', img)
+
+    def on_mouse(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            for comp in component_pins:
+                x1,y1,x2,y2 = comp['box']
+                if x1<=x<=x2 and y1<=y<=y2:
+                    # (1) 기존 점 즉시 삭제 및 화면 반영
+                    comp['pins'] = []
+                    redraw()
+
+                    # (2) 수동 입력
+                    expected = 8 if comp['class']=='IC' else 2
+                    new_pins = manual_pin_selection(orig, comp['box'], expected)
+
+                    # (3) 새 점만 저장 및 재그리기
+                    comp['pins'] = new_pins or []
+                    redraw()
+                    break
+
+    cv2.namedWindow('Fix Pins')
+    cv2.setMouseCallback('Fix Pins', on_mouse)
+    redraw()
+    while True:
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+    cv2.destroyWindow('Fix Pins')
+
 
     # 최종 수정 및 회로도 생성
     dets = [(comp['class'], 1.0, comp['box']) for comp in component_pins]
@@ -347,9 +391,7 @@ def main():
 
     for comp in component_pins:
         print(f"{comp['class']} @ {comp['box']} → pins={comp['pins']}, value={comp['value']}Ω")
-    cv2.imshow('Result', warped_raw)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+
 
 if __name__ == '__main__':
     main()
