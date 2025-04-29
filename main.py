@@ -264,26 +264,38 @@ def main():
     all_comps = [(cls, 1.0, box) for cls, box in final_labels]
     all_comps = modify_detections(warped, all_comps)
 
-    # 핀 검출 및 wire endpoints 처리
+    # 1) 구멍 좌표 검출
     holes = hole_det.detect_holes(warped_raw)
-
-    # HoleDetector로 row_nets 얻기
+    # 2) 전체 넷 클러스터링
     hd = HoleDetector()
-    row_nets = hd.get_row_nets(holes)
+    nets = hd.get_board_nets(holes)
 
-    # 3) 시각화: holes와 각 넷 표시
+    # 3) 시각화: 각 넷별 포인트 연결 (폴리라인) 및 구멍 표시
     topo_viz = warped_raw.copy()
-    # 랜덤 색상 생성
     rng = np.random.default_rng(123)
-    net_colors = {}
-    for row_idx, clusters in row_nets:
-        for net_idx, pts in enumerate(clusters):
-            key = (row_idx, net_idx)
-            net_colors[key] = tuple(rng.integers(0, 256, size=3).tolist())
-            for x, y in pts:
-                cx, cy = int(round(x)), int(round(y))
-                cv2.circle(topo_viz, (cx, cy), 3, net_colors[key], -1)
-    # 창에 표시
+    net_colors = [tuple(rng.integers(0, 256, size=3).tolist()) for _ in range(len(nets))]
+    for idx, pts in enumerate(nets):
+        color = net_colors[idx]
+        if not pts:
+            continue
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        # 수직/수평 여부 판단 후 순서대로 선 연결
+        if height > width:
+            sorted_pts = sorted(pts, key=lambda p: p[1])
+        else:
+            sorted_pts = sorted(pts, key=lambda p: p[0])
+        for i in range(len(sorted_pts) - 1):
+            x1, y1 = map(lambda v: int(round(v)), sorted_pts[i])
+            x2, y2 = map(lambda v: int(round(v)), sorted_pts[i + 1])
+            cv2.line(topo_viz, (x1, y1), (x2, y2), color, 1)
+        # 각 구멍 위치 표시
+        for x, y in pts:
+            cx, cy = int(round(x)), int(round(y))
+            cv2.circle(topo_viz, (cx, cy), 3, color, -1)
+    # 화면에 표시
     cv2.imshow('Hole & Net Topology', topo_viz)
     cv2.waitKey(0)
     cv2.destroyWindow('Hole & Net Topology')
