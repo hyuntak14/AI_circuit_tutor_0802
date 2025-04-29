@@ -1,10 +1,11 @@
-# circuit_generator.py
+# circuit_generator.py (전체 수정)
 import pandas as pd
 import numpy as np
 from detector.hole_detector import HoleDetector
 from diagram import drawDiagram
 from writeSPICE import toSPICE
 from calcVoltageAndCurrent import calcCurrentAndVoltage
+
 
 def generate_circuit(
     img_path: str,
@@ -24,69 +25,78 @@ def generate_circuit(
             for x, y in pts:
                 hole_to_net[(int(round(x)), int(round(y)))] = (row_idx, net_idx)
 
-    # 2) 소자별 핀 → 네트 매핑
+    # 2) wires 기반 넷 병합 (Union-Find)
+    parent = {(r, n): (r, n) for r, clusters in row_nets for n in range(len(clusters))}
+    def find(u):
+        if parent[u] != u:
+            parent[u] = find(parent[u])
+        return parent[u]
+    def union(u, v):
+        pu, pv = find(u), find(v)
+        if pu != pv:
+            parent[pv] = pu
+    print("=== Wire Connections (Net Unions) ===")
+    for net1, net2 in wires:
+        print(f"Union: {net1} <--> {net2}")
+        union(net1, net2)
+
+    # 3) 컴포넌트 필터링 및 매핑 (Line_area 제외)
+    comps = [c for c in all_comps if c['class'] != 'Line_area']
     mapped = []
-    for idx, comp in enumerate(all_comps, start=1):
+    for idx, comp in enumerate(comps, start=1):
         pin_a, pin_b = comp['pins']
         def nearest_net(pt):
             x, y = pt
-            if x is None or y is None:
-                raise ValueError(f"Invalid pin coordinates: {pt}")
-            valid = [h for h in hole_to_net if None not in h]
-            if not valid:
-                raise RuntimeError("No valid hole coordinates")
-            closest = min(valid, key=lambda h: (h[0]-x)**2 + (h[1]-y)**2)
-            return hole_to_net[closest]
-
-        net1 = nearest_net(pin_a)
-        net2 = nearest_net(pin_b)
-
-        # SPICE 이름 접두어
-        prefix = {
-            'Resistor':  'R',
-            'Diode':     'D',
-            'LED':       'L',
-            'Capacitor': 'C',
-            'IC':        'U'
-        }.get(comp['class'], 'X')
+            closest = min(hole_to_net.keys(), key=lambda h: (h[0]-x)**2 + (h[1]-y)**2)
+            return find(hole_to_net[closest])
+        node1 = nearest_net(pin_a)
+        node2 = nearest_net(pin_b)
+        prefix = {'Resistor':'R','Diode':'D','LED':'L','Capacitor':'C','IC':'U'}.get(comp['class'], 'X')
         name = f"{prefix}{idx}"
-
         mapped.append({
-            'name':  name,
+            'name': name,
             'class': comp['class'],
             'value': comp['value'],
-            'nodes': (net1, net2)
+            'nodes': (node1, node2)
         })
 
-    # 3) DataFrame 생성
-    df = pd.DataFrame([{
-        'name':  m['name'],
+    # 3.5) 연결 정보 출력
+    print("=== Component to Net Mapping ===")
+    for comp in mapped:
+        print(f"{comp['name']} ({comp['class']}): Net1={comp['nodes'][0]}, Net2={comp['nodes'][1]}")
+
+    # 4) DataFrame 생성: 두 핀 모두 컬럼에 저장
+    df = pd.DataFrame([{  
+        'name': m['name'],
         'class': m['class'],
         'value': m['value'],
-        'layer': m['nodes'][0][1]
+        'node1_r': m['nodes'][0][0],
+        'node1_n': m['nodes'][0][1],
+        'node2_r': m['nodes'][1][0],
+        'node2_n': m['nodes'][1][1]
     } for m in mapped])
 
-    # 4) SPICE 넷리스트
+    # 5) SPICE 넷리스트 생성
     toSPICE(df, voltage, output_spice)
-    print(f"[Circuit] SPICE 파일: {output_spice}")
 
-    # 5) 회로도 이미지 생성
-    circuit = []
-    for layer, grp in df.groupby('layer', sort=False):
-        circuit.append([
-            {
-                'name':  row['name'],
-                'value': row['value'],
-                'class': row['class']   # ← 이 줄을 추가
-            }
-            for _, row in grp.iterrows()
-        ])
-    img_data = drawDiagram(voltage, circuit)
+    # 6) 회로도 이미지 생성 (flat list 사용)
+    img_data = drawDiagram(voltage, mapped)
     with open(output_img, 'wb') as f:
         f.write(img_data)
-    print(f"[Circuit] 회로도 이미지: {output_img}")
 
-    # 6) 해석 (선택)
-    R_th, I_tot, node_currents = calcCurrentAndVoltage(voltage, circuit)
+    # 7) 선택적 해석: 레벨별 리스트 구성 후 호출
+    circuit_levels = []
+    for lvl, grp in df.groupby('node1_n', sort=False):
+        level_comps = []
+        for _, row in grp.iterrows():
+            level_comps.append({
+                'name': row['name'],
+                'value': int(row['value']),
+                'class': row['class']
+            })
+        circuit_levels.append(level_comps)
+    R_th, I_tot, node_currents = calcCurrentAndVoltage(voltage, circuit_levels)
     print(f"[Circuit] 등가저항: {R_th}, 전체전류: {I_tot}")
-    print(f"[Circuit] 노드별 전류: {node_currents}")
+    print("=== Node Voltages/ Currents per Level ===")
+    for lvl_idx, currents in enumerate(node_currents):
+        print(f"Level {lvl_idx+1}: currents = {currents}")

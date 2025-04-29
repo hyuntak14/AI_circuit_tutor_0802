@@ -150,7 +150,9 @@ class HoleDetector:
         xs = np.array([[x] for x,y in holes])
         if x_eps is None:
             diffs = np.diff(np.sort(xs.flatten()))
-            x_eps = float(np.median(diffs)) * 0.5
+            median_diff = float(np.median(diffs)) if diffs.size>0 else 0.0
+            # diffs가 모두 0이거나 비어 있으면 최소 eps를 1.0 픽셀로 설정
+            x_eps = median_diff * 0.5 if median_diff > 0 else 1.0
         labels = DBSCAN(eps=x_eps, min_samples=1).fit_predict(xs)
         clusters = {}
         for pt, lbl in zip(holes, labels):
@@ -208,7 +210,9 @@ class HoleDetector:
             if sz == 2:
                 # 세로 5홀 열(두 개 consecutive columns each)
                 for j in range(idx, idx+2):
-                    nets.append(col_clusters[j])
+                    # col_clusters 범위 밖이면 건너뛰기
+                    if 0 <= j < len(col_clusters):
+                        nets.append(col_clusters[j])
             idx += sz
 
         # 4) Terminal: 각 행별 가로 5홀 nets

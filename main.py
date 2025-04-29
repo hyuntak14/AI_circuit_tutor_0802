@@ -224,6 +224,8 @@ def modify_detections(image, detections):
     cv2.destroyWindow(win)
     return detections
 
+
+
 def main():
     component_pins = []
     root = tk.Tk()
@@ -264,6 +266,34 @@ def main():
 
     # 핀 검출 및 wire endpoints 처리
     holes = hole_det.detect_holes(warped_raw)
+
+    # HoleDetector로 row_nets 얻기
+    hd = HoleDetector()
+    row_nets = hd.get_row_nets(holes)
+
+    # 3) 시각화: holes와 각 넷 표시
+    topo_viz = warped_raw.copy()
+    # 랜덤 색상 생성
+    rng = np.random.default_rng(123)
+    net_colors = {}
+    for row_idx, clusters in row_nets:
+        for net_idx, pts in enumerate(clusters):
+            key = (row_idx, net_idx)
+            net_colors[key] = tuple(rng.integers(0, 256, size=3).tolist())
+            for x, y in pts:
+                cx, cy = int(round(x)), int(round(y))
+                cv2.circle(topo_viz, (cx, cy), 3, net_colors[key], -1)
+    # 창에 표시
+    cv2.imshow('Hole & Net Topology', topo_viz)
+    cv2.waitKey(0)
+    cv2.destroyWindow('Hole & Net Topology')
+
+    # hole_to_net 맵 생성
+    hole_to_net = {}
+    for row_idx, clusters in row_nets:
+        for net_idx, pts in enumerate(clusters):
+            for x, y in pts:
+                hole_to_net[(int(round(x)), int(round(y)))] = (row_idx, net_idx)
 
     for cls, _, box in all_comps:
         x1, y1, x2, y2 = box
@@ -319,6 +349,7 @@ def main():
         comp['num_idx'] = idx+1
 
     voltage = simpledialog.askfloat("전압 입력", "전원 전압을 입력하세요 (V):", initialvalue=10.0) or 10.0
+
     for comp in component_pins:
         if comp['class'] == 'Resistor':
             comp['value'] = simpledialog.askfloat(
@@ -373,6 +404,24 @@ def main():
     cv2.destroyWindow('Fix Pins')
 
 
+    def nearest_net(pt):
+        x, y = pt
+        # hole_to_net 키 목록
+        valid = list(hole_to_net.keys())
+        # 가장 가까운 hole 좌표 찾기
+        closest = min(valid, key=lambda h: (h[0]-x)**2 + (h[1]-y)**2)
+        return hole_to_net[closest]
+    
+    wires = []
+    for comp in component_pins:
+        if comp['class']=='Line_area' and len(comp['pins'])==2:
+            # 두 endpoint를 nearest_net 로 매핑
+            net1 = nearest_net(comp['pins'][0])
+            net2 = nearest_net(comp['pins'][1])
+            # 서로 다른 넷 사이만 연결 정보로 추가
+            if net1 != net2:
+                wires.append((net1, net2))
+
     # 최종 수정 및 회로도 생성
     dets = [(comp['class'], 1.0, comp['box']) for comp in component_pins]
     new_dets = modify_detections(warped, dets)
@@ -382,8 +431,7 @@ def main():
     generate_circuit(
         r'D:\Hyuntak\연구실\AR 회로 튜터\breadboard_project\breadboard16.jpg',
         component_pins,
-        holes,
-        [],  # wire connections
+        holes,wires,
         voltage,
         'circuit.spice',
         'circuit.jpg'

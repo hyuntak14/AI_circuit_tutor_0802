@@ -11,17 +11,17 @@ def filter_valid_holes(contours, draw=False, image=None, return_stats=False):
     aspect_ratios = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area <= 5 or area > 150:
+        if area <= 3 or area > 150:
             continue
         x, y, w, h = cv2.boundingRect(cnt)
         aspect_ratio = float(w) / h
-        if aspect_ratio < 0.5 or aspect_ratio > 1.5:
+        if aspect_ratio < 0.3 or aspect_ratio > 1.8:
             continue
         perimeter = cv2.arcLength(cnt, True)
         if perimeter == 0:
             continue
         circularity = 4 * np.pi * area / (perimeter ** 2)
-        if circularity < 0.1:
+        if circularity < 0.01:
             continue
         M = cv2.moments(cnt)
         if M["m00"] == 0:
