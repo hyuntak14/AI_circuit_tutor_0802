@@ -232,68 +232,157 @@ class HoleDetector:
         show: Boolean
         returns: list of nets (각 net: list of (x, y)))
         """
-        # 1) numpy 배열로 변환
+        # 1) numpy 배열 변환
         coords = np.array(holes, dtype=np.float32)
 
-        # 2) DBSCAN 클러스터링 (eps, min_samples는 필요에 맞게 조정)
+        # 2) 먼저 y값 기준 정렬로 상단 4행 분리 (각 50개씩)
+        sorted_by_y = sorted(holes, key=lambda p: p[1])
+        N_ROW = 50
+        if len(sorted_by_y) < 4 * N_ROW:
+            raise ValueError(f"구멍이 {len(sorted_by_y)}개로 Rails 4행({4*N_ROW})에 부족합니다.")
+        rails_pts = sorted_by_y[:4 * N_ROW]
+        rails_nets = [
+            rails_pts[i * N_ROW:(i + 1) * N_ROW]
+            for i in range(4)
+        ]
+        # Rails 포인트 집합 (필터링용)
+        rails_set = set(tuple(p) for p in rails_pts)
+
+        # 3) 전체 점들에 대해 2D DBSCAN → 모든 초기 클러스터
         db = DBSCAN(eps=12, min_samples=2).fit(coords)
         labels = db.labels_
+        unique_labels = sorted(l for l in set(labels) if l != -1)
+        all_nets = [coords[labels == lbl].tolist() for lbl in unique_labels]
 
-        # 3) 클러스터별 포인트 묶기 (노이즈 라벨 -1 은 제외)
-        unique_labels = sorted(set(labels))  # e.g. [-1, 0,1,2...]
-        nets = [
-            coords[labels == lbl].tolist()
-            for lbl in unique_labels
-            if lbl != -1
-        ]
+        # 4) Rails 클러스터(초기 y 분리)와 겹치는 DBSCAN 군집은 제거
+        #    (대부분 정확히 rails_pts와 동일한 군집이 있을 경우 필터)
+        candidate_nets = []
+        for net in all_nets:
+            pts = [tuple(p) for p in net]
+            # net 전체가 rails_pts에 속하면 제외
+            if set(pts).issubset(rails_set):
+                continue
+            candidate_nets.append(net)
 
-        # 4) (옵션) 시각화
+
+        # 4) interior 중 크기 8~15인 net들만 추출 → 평균 x 기준으로 비슷한 것끼리 묶음
+        small = [net for net in candidate_nets if 8 <= len(net) <= 15]
+        leftover = [net for net in candidate_nets if not (8 <= len(net) <= 15)]
+
+        grouped = []
+        if small:
+            mean_xs = np.array([np.mean([p[0] for p in net]) for net in small]).reshape(-1,1)
+            db2 = DBSCAN(eps=20, min_samples=1).fit(mean_xs)
+            lbl2 = db2.labels_
+            for cluster_id in sorted(set(lbl2)):
+                members = [small[i] for i, l in enumerate(lbl2) if l == cluster_id]
+                merged = [pt for net in members for pt in net]
+                # x 기준 정렬, 내림차순이 아니라 좌→우
+                merged = sorted(merged, key=lambda p: p[0])
+                grouped.append(merged)
+        # 5) grouped 된 각 merged net 을 다시 2개의 열로 분할
+
+        split_nets = []
+        for net in grouped:
+            pts = np.array(net, dtype=np.float32)
+            # (1) 중심화
+            mean_pt = pts.mean(axis=0)
+            centered = pts - mean_pt
+            # (2) 공분산 행렬 & 고유분해
+            cov = np.cov(centered, rowvar=False)
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            # 고유값이 작은 쪽 벡터를 분리축으로 사용
+            sep_axis = eigvecs[:, np.argmin(eigvals)]
+            # (3) 분리축으로 투영
+            projections = centered.dot(sep_axis)
+            med = np.median(projections)
+            # (4) 투영값 기준 분할
+            left_pts  = pts[projections <= med]
+            right_pts = pts[projections >  med]
+            # (5) y 기준 정렬 후 리스트로 변환
+            left_list  = sorted(left_pts.tolist(),  key=lambda p: p[1])
+            right_list = sorted(right_pts.tolist(), key=lambda p: p[1])
+            if left_list:
+                split_nets.append(left_list)
+            if right_list:
+                split_nets.append(right_list)
+
+        # 7) leftover 군집 → flatten → 같은 행별로 재군집
+        row_nets = []
+        for net in leftover:
+            pts_arr = np.array(net, dtype=np.float32)
+
+            # (1) 중심화
+            mean_pt = pts_arr.mean(axis=0)
+            centered = pts_arr - mean_pt
+
+            # (2) 공분산 행렬 → 고유분해
+            cov = np.cov(centered, rowvar=False)
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            # 가장 큰 고유값에 대응하는 벡터를 '가로 행 방향'으로 사용
+            row_axis = eigvecs[:, np.argmax(eigvals)]
+
+            # (3) row_axis 로 투영
+            projections = centered.dot(row_axis)  # shape (N,)
+
+            # (4) 투영값 간 차분으로 eps_row 계산
+            diffs = np.diff(np.sort(projections))
+            eps_row = (np.median(diffs) *4.0) if len(diffs) > 0 else 1.0
+
+            # (5) 1D DBSCAN 으로 같은 row_axis 상의 값끼리 군집화
+            labels_r = DBSCAN(eps=eps_row, min_samples=3).fit_predict(
+                projections.reshape(-1,1)
+            )
+
+            # (5) 노이즈(레이블 -1) 포인트를 가장 가까운 군집으로 재할당
+            if (noise_idx := np.where(labels_r == -1)[0]).size:
+                # 각 군집의 투영값 평균 계산
+                centers = {
+                    lab: projections[labels_r == lab].mean()
+                    for lab in set(labels_r) if lab != -1
+                }
+                for i in noise_idx:
+                    val = projections[i]
+                    # 가장 가까운 군집 레이블 찾기
+                    nearest = min(centers.keys(), key=lambda lab: abs(centers[lab] - val))
+                    labels_r[i] = nearest
+
+            # (6) 레이블별로 모아서 x 기준으로 정렬 → 하나의 row_net
+            for rl in sorted(set(labels_r)):
+                subgroup = pts_arr[labels_r == rl]
+                row_nets.append(sorted(subgroup.tolist(), key=lambda p: p[0]))
+
+        # 6) 최종 순서: rails → grouped small → leftover
+        final_nets = rails_nets + split_nets + row_nets
+
+        # 7) (옵션) 시각화
         if show and base_img is not None:
-            # BGR 채널 확보
-            if base_img.ndim == 2:
-                viz = cv2.cvtColor(base_img, cv2.COLOR_GRAY2BGR)
-            else:
-                viz = base_img.copy()
-
+            viz = cv2.cvtColor(base_img, cv2.COLOR_GRAY2BGR) if base_img.ndim == 2 else base_img.copy()
             rng = np.random.default_rng(123)
-            colors = [
-                tuple(int(v) for v in rng.integers(0, 256, size=3).tolist())
-                for _ in nets
-            ]
+            colors = [tuple(int(v) for v in rng.integers(0, 256, 3)) for _ in final_nets]
 
-            for idx, pts in enumerate(nets):
-                color = colors[idx]
-                if not pts:
+            for idx, net in enumerate(final_nets):
+                c = colors[idx]
+                if not net:
                     continue
+                xs = [p[0] for p in net]
+                ys = [p[1] for p in net]
+                w, h = max(xs) - min(xs), max(ys) - min(ys)
+                pts = sorted(net, key=lambda p: (p[1] if h > w else p[0]))
+                # 선 그리기
+                for i in range(len(pts) - 1):
+                    x1, y1 = map(lambda v: int(round(v)), pts[i])
+                    x2, y2 = map(lambda v: int(round(v)), pts[i + 1])
+                    cv2.line(viz, (x1, y1), (x2, y2), c, 1)
+                # 점 표시
+                for x, y in net:
+                    cv2.circle(viz, (int(round(x)), int(round(y))), 3, c, -1)
 
-                # 직선 혹은 수직 판단
-                xs = [p[0] for p in pts]
-                ys = [p[1] for p in pts]
-                width  = max(xs) - min(xs)
-                height = max(ys) - min(ys)
-
-                # 정렬 기준 선택
-                if height > width:
-                    sorted_pts = sorted(pts, key=lambda p: p[1])
-                else:
-                    sorted_pts = sorted(pts, key=lambda p: p[0])
-
-                # 폴리라인 연결
-                for i in range(len(sorted_pts) - 1):
-                    x1, y1 = map(lambda v: int(round(v)), sorted_pts[i])
-                    x2, y2 = map(lambda v: int(round(v)), sorted_pts[i + 1])
-                    cv2.line(viz, (x1, y1), (x2, y2), color, 1)
-
-                # 구멍 위치 표시
-                for x, y in pts:
-                    cx, cy = int(round(x)), int(round(y))
-                    cv2.circle(viz, (cx, cy), 3, color, -1)
-
-            cv2.imshow('Affine-aligned Holes Clusters', viz)
+            cv2.imshow('Rails + Clusters + SmallGroups', viz)
             cv2.waitKey(0)
-            cv2.destroyWindow('Affine-aligned Holes Clusters')
+            cv2.destroyWindow('Rails + Clusters + SmallGroups')
 
-        return nets
+        return final_nets
 
 
     def detect_holes(self, image, visualize_nets=False):
