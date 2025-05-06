@@ -4,7 +4,7 @@ from hole_detector import HoleDetector
 from sklearn.neighbors import NearestNeighbors
 
 # === 사용자 설정 ===
-IMAGE_PATH          = "breadboard9.jpg"             # 입력 이미지
+IMAGE_PATH          = 'breadboard4.jpg'             # 입력 이미지
 TEMPLATE_CSV        = "template_holes_complete.csv"  # 템플릿 CSV
 TEMPLATE_IMAGE_PATH = "breadboard18.jpg"            # 템플릿 원본 이미지 경로 (스케일링)
 MAX_NN_DIST         = 20.0                           # 매칭 허용 픽셀 거리

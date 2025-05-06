@@ -273,7 +273,7 @@ def plot_clustered_rows(ax, holes):
 # ⑥ 메인 실행: 구멍 검출, 행 그룹화, 최적 파라미터 탐색, 보간 및 시각화
 ###########################################
 if __name__ == '__main__':
-    image_file = "breadboard7.jpg"
+    image_file = "breadboard18.jpg"
     # 구멍 검출: 원본 이미지에 검출된 구멍 표시 (draw=True)
     holes, detected_image = detect_breadboard_holes_no_illumination(image_file, debug=True)
     print(f"검출된 구멍 개수: {len(holes)}")
@@ -299,8 +299,17 @@ if __name__ == '__main__':
     # 보간 적용된 결과를 원본 이미지 위에 표시 (보간된 행은 원래 점보다 크게 표시됨)
     proc_image = draw_processed_holes(detected_image.copy(), interpolated_groups)
     
+    scale_percent = 50
+
+    # 이미지의 현재 가로, 세로 크기 가져오기
+    width = int(detected_image.shape[1] * scale_percent / 100)
+    height = int(detected_image.shape[0] * scale_percent / 100)
+    dim = (width, height)
+
+    # 이미지 리사이징
+    resized_image = cv2.resize(detected_image, dim, interpolation=cv2.INTER_LINEAR)
     # (1) 보간 처리되지 않은 원본 검출 결과 이미지와 보간 처리된 이미지 출력
-    cv2.imshow("Non-Interpolated Detected Image", cv2.cvtColor(detected_image, cv2.COLOR_RGB2BGR))
+    cv2.imshow("Non-Interpolated Detected Image", cv2.cvtColor(resized_image, cv2.COLOR_RGB2BGR))
     cv2.imshow("Processed Rows with Interpolation", cv2.cvtColor(proc_image, cv2.COLOR_RGB2BGR))
     cv2.waitKey(0)
     cv2.destroyAllWindows()

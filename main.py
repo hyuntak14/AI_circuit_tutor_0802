@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import tkinter as tk
 from tkinter import simpledialog
-
+from sklearn.cluster import DBSCAN
 from detector.fasterrcnn_detector import FasterRCNNDetector
 from detector.hole_detector import HoleDetector
 from detector.resistor_detector import ResistorEndpointDetector
@@ -233,7 +233,12 @@ def main():
 
     # Detector 초기화
     detector     = FasterRCNNDetector(r'D:/Hyuntak/연구실/AR 회로 튜터/breadboard_project/model/fasterrcnn.pt')
-    hole_det     = HoleDetector()
+    hole_det = HoleDetector(
+    template_csv_path='detector/template_holes_complete.csv',
+    template_image_path='detector/breadboard18.jpg',
+    max_nn_dist=20.0
+)
+
     wire_det     = WireDetector(kernel_size=4)
     resistor_det = ResistorEndpointDetector()
     led_det      = LedEndpointDetector(max_hole_dist=15, visualize=False)
@@ -241,7 +246,7 @@ def main():
     ic_det       = ICChipPinDetector()       # IC 칩 핀 위치 detector
 
     # 이미지 로드 및 브레드보드 검출
-    img = imread_unicode(r'D:\Hyuntak\연구실\AR 회로 튜터\breadboard_project\breadboard16.jpg')
+    img = imread_unicode(r'D:\Hyuntak\연구실\AR 회로 튜터\breadboard_project\breadboard18.jpg')
     comps = detector.detect(img)
     bb = next((b for c,_,b in comps if c.lower()=='breadboard'), None)
     if bb is None:
@@ -267,38 +272,76 @@ def main():
     # 1) 구멍 좌표 검출
     holes = hole_det.detect_holes(warped_raw)
     # 2) 전체 넷 클러스터링
-    hd = HoleDetector()
-    nets = hd.get_board_nets(holes)
+    nets = hole_det.get_board_nets(holes,base_img=warped_raw, show=True)
+
+    # 2-1) 행별 그룹(cluster) 생성 (template alignment 적용된 points 기준)
+    hole_det.visualize_clusters(
+    base_img=warped_raw,
+    clusters=nets,
+    affine_pts=holes  # affine 점까지 같이 표시하고 싶으면
+)
+
+
+
+    # 1) Holes detect + affine 적용 → fitted_pts
+    fitted_pts = hole_det.detect_holes(warped_raw)  
+    coords = np.array(fitted_pts, dtype=np.float32)
+
+    # 2) DBSCAN 클러스터링으로 넷별 그룹핑
+    db = DBSCAN(eps=12, min_samples=2).fit(coords)
+    labels = db.labels_  # -1은 노이즈
+    unique_labels = sorted(set(labels))
+
+    # 클러스터별 포인트 리스트 생성
+    nets = [coords[labels == lbl].tolist() for lbl in unique_labels]
 
     # 3) 시각화: 각 넷별 포인트 연결 (폴리라인) 및 구멍 표시
-    topo_viz = warped_raw.copy()
+    # topo_viz 생성 시 채널 수 체크
+    if warped_raw.ndim == 2:
+        topo_viz = cv2.cvtColor(warped_raw, cv2.COLOR_GRAY2BGR)
+    else:
+        topo_viz = warped_raw.copy()
+
     rng = np.random.default_rng(123)
-    net_colors = [tuple(rng.integers(0, 256, size=3).tolist()) for _ in range(len(nets))]
+    net_colors = [tuple(rng.integers(0, 256, size=3).tolist()) for _ in nets]
+
     for idx, pts in enumerate(nets):
         color = net_colors[idx]
         if not pts:
             continue
+
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
-        width = max(xs) - min(xs)
+        width  = max(xs) - min(xs)
         height = max(ys) - min(ys)
-        # 수직/수평 여부 판단 후 순서대로 선 연결
+
+        # 수직/수평 여부 판단 후 정렬
         if height > width:
             sorted_pts = sorted(pts, key=lambda p: p[1])
         else:
             sorted_pts = sorted(pts, key=lambda p: p[0])
+
+        # 폴리라인 연결
         for i in range(len(sorted_pts) - 1):
             x1, y1 = map(lambda v: int(round(v)), sorted_pts[i])
             x2, y2 = map(lambda v: int(round(v)), sorted_pts[i + 1])
             cv2.line(topo_viz, (x1, y1), (x2, y2), color, 1)
+
         # 각 구멍 위치 표시
         for x, y in pts:
             cx, cy = int(round(x)), int(round(y))
             cv2.circle(topo_viz, (cx, cy), 3, color, -1)
+
     # 화면에 표시
-    cv2.imshow('Hole & Net Topology', topo_viz)
+    cv2.imshow('Affine-aligned Holes Clusters', topo_viz)
     cv2.waitKey(0)
-    cv2.destroyWindow('Hole & Net Topology')
+    cv2.destroyWindow('Affine-aligned Holes Clusters')
+
+
+    clusters = hole_det.custom_cluster_rows_and_columns(fitted_pts)
+    hole_det.visualize_clusters(warped_raw, clusters, affine_pts=fitted_pts)
+
+
 
     # hole_to_net 맵 생성
     hole_to_net = {}
@@ -441,7 +484,7 @@ def main():
         comp['box'] = box
 
     generate_circuit(
-        r'D:\Hyuntak\연구실\AR 회로 튜터\breadboard_project\breadboard16.jpg',
+        r'D:\Hyuntak\연구실\AR 회로 튜터\breadboard_project\breadboard18.jpg',
         component_pins,
         holes,wires,
         voltage,
