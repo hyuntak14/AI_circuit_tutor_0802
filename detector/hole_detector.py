@@ -355,6 +355,26 @@ class HoleDetector:
         # 6) 최종 순서: rails → grouped small → leftover
         final_nets = rails_nets + split_nets + row_nets
 
+        y_thresh, grp, _ = self.find_optimal_y(holes)
+        # grp: [(row_idx, pts, med_y), …]
+        grp_sorted = sorted(grp, key=lambda x: x[0])  # row_idx 순
+        self.row_bounds = [
+            (min(p[1] for p in pts), max(p[1] for p in pts))
+            for _, pts, _ in grp_sorted
+        ]
+        # ──────────────────────────────────────────────────
+
+        # 7) 이제 row_bounds가 정의됐으니, 최종_nets를 row별로 나눈 row_nets 생성
+        row_nets = []
+        for row_idx, (ymin, ymax) in enumerate(self.row_bounds):
+            clusters_in_row = [
+                [pt for pt in net if ymin <= pt[1] <= ymax]
+                for net in final_nets
+            ]
+            clusters_in_row = [c for c in clusters_in_row if c]
+            row_nets.append((row_idx, clusters_in_row))
+
+
         # 7) (옵션) 시각화
         if show and base_img is not None:
             viz = cv2.cvtColor(base_img, cv2.COLOR_GRAY2BGR) if base_img.ndim == 2 else base_img.copy()
@@ -382,7 +402,17 @@ class HoleDetector:
             cv2.waitKey(0)
             cv2.destroyWindow('Rails + Clusters + SmallGroups')
 
-        return final_nets
+        
+
+        # row_nets 항목마다 net_id를 포함
+        return final_nets, [
+    (row_idx, [
+        {'net_id': net_idx, 'pts': pts_in_row}
+        for net_idx, net in enumerate(final_nets)
+        if (pts_in_row := [pt for pt in net if ymin <= pt[1] <= ymax])
+    ])
+    for row_idx, (ymin, ymax) in enumerate(self.row_bounds)
+]
 
 
     def detect_holes(self, image, visualize_nets=False):

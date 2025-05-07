@@ -1,6 +1,8 @@
 import os
+import matplotlib
+matplotlib.use('Qt5Agg')   # 또는 'Qt5Agg'
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-
+import matplotlib.pyplot as plt
 import cv2
 import numpy as np
 import tkinter as tk
@@ -15,6 +17,7 @@ from ui.perspective_editor import select_and_transform
 from circuit_generator import generate_circuit
 from detector.diode_detector import ResistorEndpointDetector as DiodeEndpointDetector
 from detector.ic_chip_detector import ICChipPinDetector
+import random
 
 # 소자별 색상 (data.yaml 기준)
 class_colors = {
@@ -26,6 +29,61 @@ class_colors = {
     'Line_area':  (255, 0, 0),
     'Resistor':   (200, 170, 0)
 }
+def visualize_cluster_connections(row_nets, component_pins):
+    # 1) 전체 net_id 추출 & 색상 매핑
+    net_ids = {entry['net_id']
+               for _, clusters in row_nets
+               for entry in clusters}
+    colors = {nid: (random.random(), random.random(), random.random())
+              for nid in net_ids}
+
+    plt.figure(figsize=(8,6))
+    # 2) 클러스터(구멍) 시각화
+    for row_idx, clusters in row_nets:
+        for entry in clusters:
+            nid = entry['net_id']
+            pts = entry['pts']              # pts: [(x,y), …]
+            xs = [int(round(x)) for x,y in pts]
+            ys = [int(round(y)) for x,y in pts]
+            plt.scatter(xs, ys,
+                        c=[colors[nid]],
+                        s=20,
+                        label=f'Net {nid}')
+
+    # 3) 소자 핀 연결 시각화
+    for comp in component_pins:
+        name = comp['class']
+        pins = comp['pins']               # [(x1,y1),(x2,y2)]
+        xs = [p[0] for p in pins]
+        ys = [p[1] for p in pins]
+        plt.plot(xs, ys,
+                 marker='x',
+                 linestyle='-',
+                 linewidth=1)
+        plt.text(xs[0], ys[0], name,
+                 fontsize=8, va='bottom')
+
+    # 4) 축 뒤집기 & 범례
+    plt.gca().invert_yaxis()    
+    # 중복 레이블 제거
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys(),
+               bbox_to_anchor=(1.02,1), loc='upper left')
+    plt.tight_layout()
+    # 1) 파일로 저장
+    out_path = 'cluster_connections.png'
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
+    img = cv2.imread(out_path)
+    if img is not None:
+        cv2.imshow('Cluster Connections', img)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    else:
+        print(f"이미지 로드 실패: {out_path}")
+
 
 def imread_unicode(path):
     with open(path, 'rb') as f:
@@ -272,7 +330,7 @@ def main():
     # 1) 구멍 좌표 검출
     holes = hole_det.detect_holes(warped_raw)
     # 2) 전체 넷 클러스터링
-    nets = hole_det.get_board_nets(holes,base_img=warped_raw, show=True)
+    nets, row_nets  = hole_det.get_board_nets(holes,base_img=warped_raw, show=True)
 
     # 2-1) 행별 그룹(cluster) 생성 (template alignment 적용된 points 기준)
     hole_det.visualize_clusters(
@@ -283,72 +341,13 @@ def main():
 
 
 
-    # 1) Holes detect + affine 적용 → fitted_pts
-    fitted_pts = hole_det.detect_holes(warped_raw)  
-    coords = np.array(fitted_pts, dtype=np.float32)
-
-    # 2) DBSCAN 클러스터링으로 넷별 그룹핑
-    db = DBSCAN(eps=12, min_samples=2).fit(coords)
-    labels = db.labels_  # -1은 노이즈
-    unique_labels = sorted(set(labels))
-
-    # 클러스터별 포인트 리스트 생성
-    nets = [coords[labels == lbl].tolist() for lbl in unique_labels]
-
-    # 3) 시각화: 각 넷별 포인트 연결 (폴리라인) 및 구멍 표시
-    # topo_viz 생성 시 채널 수 체크
-    if warped_raw.ndim == 2:
-        topo_viz = cv2.cvtColor(warped_raw, cv2.COLOR_GRAY2BGR)
-    else:
-        topo_viz = warped_raw.copy()
-
-    rng = np.random.default_rng(123)
-    net_colors = [tuple(rng.integers(0, 256, size=3).tolist()) for _ in nets]
-
-    for idx, pts in enumerate(nets):
-        color = net_colors[idx]
-        if not pts:
-            continue
-
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        width  = max(xs) - min(xs)
-        height = max(ys) - min(ys)
-
-        # 수직/수평 여부 판단 후 정렬
-        if height > width:
-            sorted_pts = sorted(pts, key=lambda p: p[1])
-        else:
-            sorted_pts = sorted(pts, key=lambda p: p[0])
-
-        # 폴리라인 연결
-        for i in range(len(sorted_pts) - 1):
-            x1, y1 = map(lambda v: int(round(v)), sorted_pts[i])
-            x2, y2 = map(lambda v: int(round(v)), sorted_pts[i + 1])
-            cv2.line(topo_viz, (x1, y1), (x2, y2), color, 1)
-
-        # 각 구멍 위치 표시
-        for x, y in pts:
-            cx, cy = int(round(x)), int(round(y))
-            cv2.circle(topo_viz, (cx, cy), 3, color, -1)
-
-    # 화면에 표시
-    cv2.imshow('Affine-aligned Holes Clusters', topo_viz)
-    cv2.waitKey(0)
-    cv2.destroyWindow('Affine-aligned Holes Clusters')
-
-
-    clusters = hole_det.custom_cluster_rows_and_columns(fitted_pts)
-    hole_det.visualize_clusters(warped_raw, clusters, affine_pts=fitted_pts)
-
-
-
     # hole_to_net 맵 생성
     hole_to_net = {}
     for row_idx, clusters in row_nets:
-        for net_idx, pts in enumerate(clusters):
-            for x, y in pts:
-                hole_to_net[(int(round(x)), int(round(y)))] = (row_idx, net_idx)
+        for entry in clusters:
+            net_id = entry['net_id']
+            for x, y in entry['pts']:
+                hole_to_net[(int(round(x)), int(round(y)))] = net_id
 
     for cls, _, box in all_comps:
         x1, y1, x2, y2 = box
@@ -460,12 +459,15 @@ def main():
 
 
     def nearest_net(pt):
-        x, y = pt
-        # hole_to_net 키 목록
-        valid = list(hole_to_net.keys())
-        # 가장 가까운 hole 좌표 찾기
-        closest = min(valid, key=lambda h: (h[0]-x)**2 + (h[1]-y)**2)
-        return hole_to_net[closest]
+        closest = min(hole_to_net.keys(),
+                    key=lambda h: (h[0]-pt[0])**2 + (h[1]-pt[1])**2)
+        return find(hole_to_net[closest])  # 이미 Union-Find 상에서 병합된 global net_id 반환
+
+    parent = { net: net for net in set(hole_to_net.values()) }
+    def find(u):
+        if parent[u] != u:
+            parent[u] = find(parent[u])
+        return parent[u]
     
     wires = []
     for comp in component_pins:
@@ -483,13 +485,16 @@ def main():
     for comp, (_,_,box) in zip(component_pins, new_dets):
         comp['box'] = box
 
+    visualize_cluster_connections(row_nets, component_pins)
+
     generate_circuit(
         r'D:\Hyuntak\연구실\AR 회로 튜터\breadboard_project\breadboard18.jpg',
         component_pins,
         holes,wires,
         voltage,
         'circuit.spice',
-        'circuit.jpg'
+        'circuit.jpg',
+        hole_to_net,
     )
 
     for comp in component_pins:
