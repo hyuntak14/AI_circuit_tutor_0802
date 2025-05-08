@@ -29,6 +29,71 @@ class_colors = {
     'Line_area':  (255, 0, 0),
     'Resistor':   (200, 170, 0)
 }
+
+def visualize_component_nets(img, component_pins, hole_to_net, parent, find):
+    """
+    • img: 회로판 원본(BGR)
+    • component_pins: [{'class','box','pins',…}, …]
+    • hole_to_net: {(x,y): raw_net_id, …}
+    • parent, find: Union-Find 자료구조 함수
+    """
+    import cv2
+    import numpy as np
+
+    # 1) Net ID별 고유 색상 생성
+    #    (Union-Find으로 최종 병합된 ID set)
+    final_nets = set(find(n) for n in hole_to_net.values())
+    rng = np.random.default_rng(1234)
+    net_colors = {
+        net_id: tuple(int(c) for c in rng.integers(0,256,3))
+        for net_id in final_nets
+    }
+
+    overlay = img.copy()
+    # 2) 각 컴포넌트 핀마다, nearest_net → 최종 Net ID 찾고, 원 그리기
+    for comp in component_pins:
+        for pt in comp['pins']:
+            # raw 위치(pt)와 hole_to_net 키 중 최소거리로 매핑
+            closest = min(
+                hole_to_net.keys(),
+                key=lambda h: (h[0]-pt[0])**2 + (h[1]-pt[1])**2
+            )
+            raw_net = hole_to_net[closest]
+            net_id = find(raw_net)
+            color = net_colors[net_id]
+            cv2.circle(overlay, pt, 6, color, -1)
+            # Net ID 텍스트 표시
+            cv2.putText(overlay, str(net_id), (pt[0]+8, pt[1]-8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    # 3) 반투명하게 합성
+    alpha = 0.6
+    out = cv2.addWeighted(overlay, alpha, img, 1-alpha, 0)
+
+    # 4) 창에 띄우기
+    cv2.imshow('Component ↔ Net Mapping', out)
+    cv2.waitKey(0)
+    cv2.destroyWindow('Component ↔ Net Mapping')
+
+
+def get_two_clicks(img, window_name, prompts):
+    pts = []
+    clone = img.copy()
+    def click_event(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            pts.append((x, y))
+            cv2.circle(clone, (x, y), 5, (0, 0, 255), -1)
+            cv2.imshow(window_name, clone)
+            if len(pts) >= len(prompts):
+                cv2.destroyWindow(window_name)
+    cv2.namedWindow(window_name)
+    cv2.imshow(window_name, clone)
+    cv2.setMouseCallback(window_name, click_event)
+    for prompt in prompts:
+        print(prompt)
+    cv2.waitKey(0)
+    return pts[0], pts[1]
+
 def visualize_cluster_connections(row_nets, component_pins):
     # 1) 전체 net_id 추출 & 색상 매핑
     net_ids = {entry['net_id']
@@ -485,16 +550,36 @@ def main():
     for comp, (_,_,box) in zip(component_pins, new_dets):
         comp['box'] = box
 
-    visualize_cluster_connections(row_nets, component_pins)
+    visualize_component_nets(warped_raw, component_pins, hole_to_net, parent, find)
 
+    # ———————————————— 전원 단자 클릭 입력 ————————————————
+    from diagram import get_n_clicks  # 또는 main.py에 이미 있던 get_two_clicks
+
+    plus_pt, minus_pt = get_n_clicks(
+        warped_raw,
+        'Select Power Terminals',
+        ['Click + terminal', 'Click - terminal']
+    )
+    # nearest_net은 위에서 정의된 함수
+    net_plus  = nearest_net(plus_pt)
+    net_minus = nearest_net(minus_pt)
+
+    # schemdraw 그리드 x 좌표로 변환
+    img_w = warped_raw.shape[1]
+    grid_width = len(component_pins) * 2 + 2
+    x_plus_grid  = plus_pt[0]  / img_w * grid_width
+    x_minus_grid = minus_pt[0] / img_w * grid_width
+
+    # ———————————————— 회로도 생성 (전원 위치 넘김) ————————————————
     generate_circuit(
-        r'D:\Hyuntak\연구실\AR 회로 튜터\breadboard_project\breadboard18.jpg',
         component_pins,
-        holes,wires,
+        holes, wires,
         voltage,
         'circuit.spice',
         'circuit.jpg',
         hole_to_net,
+        power_plus =(net_plus,  x_plus_grid),
+        power_minus=(net_minus, x_minus_grid)
     )
 
     for comp in component_pins:
