@@ -24,7 +24,7 @@ def get_n_clicks(img, window_name, prompts):
     return pts
 
 
-def drawDiagram(voltage, comps, power_plus=None, power_minus=None):
+def drawDiagram(voltage, comps,wires, power_plus=None, power_minus=None):
     """회로도를 그리는 함수
     
     Args:
@@ -65,7 +65,15 @@ def drawDiagram(voltage, comps, power_plus=None, power_minus=None):
         power_x = max_comp_x + 2
     
     # 1) 필요한 노드와 범위 파악
-    nets = sorted({n for comp in comps for n in comp['nodes']})
+    #nets = sorted({n for comp in comps for n in comp['nodes']})
+    # — 컴포넌트 노드 + 전원 터미널 네트 포함 —
+    net_set = {n for comp in comps for n in comp['nodes']}
+    if power_plus:   net_set.add(power_plus[0])
+    if power_minus:  net_set.add(power_minus[0])
+    # (선택) 와이어 네트까지 포함하려면, drawDiagram 호출 시 wires 인자를 추가로 넘기고:
+    if wires:
+        for u,v in wires: net_set.update((u,v))
+    nets = sorted(net_set)
     y_positions = {n: -i * 1.5 for i, n in enumerate(nets)}
     
     # 노드별 사용 범위 파악
@@ -290,7 +298,7 @@ if __name__ == '__main__':
             p_minus = (0, width)  # 네트워크 0, 오른쪽 끝
 
     # 회로도 그리기
-    drawing = drawDiagram(voltage, circuit, power_plus=p_plus, power_minus=p_minus)
+    drawing = drawDiagram(voltage, circuit, wires=[], power_plus=p_plus, power_minus=p_minus)
     drawing.draw()
     drawing.save(args.output)
     print(f"Circuit diagram saved to {args.output}")

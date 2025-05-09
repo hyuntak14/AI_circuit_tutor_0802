@@ -83,7 +83,7 @@ def generate_circuit(
     toSPICE(df, voltage, output_spice)
 
     # 6) 회로도 이미지 생성 (flat list 사용)
-    drawing = drawDiagram(voltage, mapped,power_plus=power_plus,power_minus=power_minus)
+    drawing = drawDiagram(voltage, mapped,wires,power_plus=power_plus,power_minus=power_minus)
     drawing.draw()          # 도면을 렌더링합니다 (schemdraw 내부적으로 필요 시 생략 가능)
     drawing.save(output_img)  # 파일로 바로 저장
 

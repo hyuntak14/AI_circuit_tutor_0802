@@ -560,15 +560,54 @@ def main():
         'Select Power Terminals',
         ['Click + terminal', 'Click - terminal']
     )
-    # nearest_net은 위에서 정의된 함수
-    net_plus  = nearest_net(plus_pt)
-    net_minus = nearest_net(minus_pt)
 
-    # schemdraw 그리드 x 좌표로 변환
-    img_w = warped_raw.shape[1]
-    grid_width = len(component_pins) * 2 + 2
-    x_plus_grid  = plus_pt[0]  / img_w * grid_width
-    x_minus_grid = minus_pt[0] / img_w * grid_width
+       # ———— ① 모든 엔드포인트 수집 ————
+   # component_pins 안의 'pins' 리스트(와이어 끝점, 소자 핀 위치)를 모두 합침
+    all_endpoints = [
+        pt
+        for comp in component_pins
+        for pt   in comp['pins']
+    ]
+
+    # ———— ② 클릭 위치 주변 최단거리 엔드포인트 찾기 ————
+    closest_plus  = min(all_endpoints,
+                        key=lambda p: (p[0]-plus_pt[0])**2 + (p[1]-plus_pt[1])**2)
+    closest_minus = min(all_endpoints,
+                        key=lambda p: (p[0]-minus_pt[0])**2 + (p[1]-minus_pt[1])**2)
+    
+
+
+
+    # (선택) 디버그용—매칭된 엔드포인트 시각화
+    cv2.circle(warped_raw, closest_plus,  7, (255,0,0), -1)
+    cv2.circle(warped_raw, closest_minus, 7, (255,0,0), -1)
+
+        # ———— ②-1 시각화: 클릭 &#x2192; 매칭 엔드포인트 표시 ————
+    # 클릭 위치: 빨간색, 매칭된 점: 파란색, 연결선: 녹색
+    cv2.circle(warped_raw, plus_pt,        5, (0,0,255),  -1)  # + 터미널 클릭 위치
+    cv2.circle(warped_raw, closest_plus,   7, (255,0,0),  -1)  # + 에 매핑된 엔드포인트
+    cv2.line(  warped_raw, plus_pt, closest_plus, (0,255,0), 2)  # 두 점 연결선
+
+    cv2.circle(warped_raw, minus_pt,       5, (0,0,255),  -1)  # - 터미널 클릭 위치
+    cv2.circle(warped_raw, closest_minus,  7, (255,0,0),  -1)  # - 에 매핑된 엔드포인트
+    cv2.line(  warped_raw, minus_pt, closest_minus, (0,255,0), 2)  # 두 점 연결선
+
+    # 시각화 창 띄우기 (원하면 이 줄 제거)
+    cv2.imshow('Power-Terminal Mapping', warped_raw)
+    cv2.waitKey(0)
+    cv2.destroyWindow('Power-Terminal Mapping')
+
+    # ———— ③ 네트워크 ID로 매핑 ————
+    net_plus  = nearest_net(closest_plus)
+    net_minus = nearest_net(closest_minus)
+
+    # ———— ④ schemdraw 그리드 x 좌표 변환 ————
+    img_w      = warped_raw.shape[1]
+    # Line_area 는 제외한 컴포넌트 수
+    comp_count = len([c for c in component_pins if c['class']!='Line_area'])
+    grid_width = comp_count * 2 + 2
+    x_plus_grid  = closest_plus[0]  / img_w * grid_width
+    x_minus_grid = closest_minus[0] / img_w * grid_width
 
     # ———————————————— 회로도 생성 (전원 위치 넘김) ————————————————
     generate_circuit(
