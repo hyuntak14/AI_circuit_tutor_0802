@@ -8,6 +8,7 @@ from calcVoltageAndCurrent import calcCurrentAndVoltage
 import networkx as nx
 from networkx.readwrite import write_graphml
 import matplotlib.pyplot as plt
+from diagram import draw_connectivity_graph
 
 def generate_circuit(
     all_comps: list,
@@ -37,6 +38,15 @@ def generate_circuit(
     for net1, net2 in wires:
         print(f"Union: {net1} <--> {net2}")
         union(net1, net2)
+
+    # 2.5) 전원 단자의 net ID 도 Union-Find 대표 ID 로 매핑
+    if power_plus is not None:
+        raw_np, x_np = power_plus
+        power_plus = (find(raw_np), x_np)
+    if power_minus is not None:
+        raw_nm, x_nm = power_minus
+        power_minus = (find(raw_nm), x_nm)
+
 
     # 3) 컴포넌트 필터링 및 매핑 (Line_area 제외)
     comps = [c for c in all_comps if c['class'] != 'Line_area']
@@ -82,7 +92,21 @@ def generate_circuit(
     # 5) SPICE 넷리스트 생성
     toSPICE(df, voltage, output_spice)
 
+
+
     # 6) 회로도 이미지 생성 (flat list 사용)
+    # 6-1 노드 - 엣지 형태로 생성
+
+
+    # mapped: generate_circuit()에서 반환된 mapped 리스트
+    # power_plus, power_minus: 동일하게 전달된 값
+    G = draw_connectivity_graph(
+        mapped,
+        power_plus=power_plus,
+        power_minus=power_minus,
+        output_path='connectivity_graph.png'   # 파일로도 저장하고 싶으면 경로 지정
+    )
+
     drawing = drawDiagram(voltage, mapped,wires,power_plus=power_plus,power_minus=power_minus)
     drawing.draw()          # 도면을 렌더링합니다 (schemdraw 내부적으로 필요 시 생략 가능)
     drawing.save(output_img)  # 파일로 바로 저장
@@ -103,6 +127,7 @@ def generate_circuit(
     print("=== Node Voltages/ Currents per Level ===")
     for lvl_idx, currents in enumerate(node_currents):
         print(f"Level {lvl_idx+1}: currents = {currents}")
+    return mapped, hole_to_net
 
 def build_circuit_graph(mapped_comps):
     G = nx.Graph()

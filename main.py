@@ -17,6 +17,7 @@ from ui.perspective_editor import select_and_transform
 from circuit_generator import generate_circuit
 from detector.diode_detector import ResistorEndpointDetector as DiodeEndpointDetector
 from detector.ic_chip_detector import ICChipPinDetector
+from checker.error_checker import ErrorChecker
 import random
 
 # 소자별 색상 (data.yaml 기준)
@@ -610,7 +611,7 @@ def main():
     x_minus_grid = closest_minus[0] / img_w * grid_width
 
     # ———————————————— 회로도 생성 (전원 위치 넘김) ————————————————
-    generate_circuit(
+    components, nets = generate_circuit(
         component_pins,
         holes, wires,
         voltage,
@@ -624,6 +625,15 @@ def main():
     for comp in component_pins:
         print(f"{comp['class']} @ {comp['box']} → pins={comp['pins']}, value={comp['value']}Ω")
 
+    checker = ErrorChecker(components, nets, ground_nodes={0})
+    errors = checker.run_all_checks()
+
+    if errors:
+        print("=== Wiring Errors Detected ===")
+        for e in errors:
+            print("·", e)
+    else:
+        print("No wiring errors detected.")
 
 if __name__ == '__main__':
     main()

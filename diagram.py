@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import cv2
 import schemdraw
 import schemdraw.elements as e
+import networkx as nx
 
 def get_n_clicks(img, window_name, prompts):
     pts = []
@@ -24,18 +25,33 @@ def get_n_clicks(img, window_name, prompts):
     return pts
 
 
-def drawDiagram(voltage, comps,wires, power_plus=None, power_minus=None):
+def drawDiagram(voltage, comps, wires=None, power_plus=None, power_minus=None):
     """회로도를 그리는 함수
     
     Args:
         voltage: 공급 전압 (V)
         comps: 회로 컴포넌트 리스트, 각 항목은 'name','class','value','nodes' 키를 가진 딕셔너리
+        wires: 와이어 연결 리스트 [(net1, net2), ...] - 두 네트워크 ID 간 연결 정보
         power_plus: (net_id, x_pos) - 전원 +를 연결할 네트워크 ID와 x 위치
         power_minus: (net_id, x_pos) - 전원 -를 연결할 네트워크 ID와 x 위치
         
     Returns:
         schemdraw.Drawing: 생성된 회로도 객체
     """
+
+    if power_plus and power_minus:
+        net_p, x_p = power_plus
+        net_m, x_m = power_minus
+        avg_x = (x_p + x_m) / 2 if abs(x_p - x_m) >= 0.1 else x_p
+
+        comps.append({
+            'name': 'V1',
+            'class': 'VoltageSource',
+            'value': voltage,
+            'nodes': (net_p, net_m),
+            'x': avg_x  # 나중에 강제로 위치 고정
+        })
+    
     d = schemdraw.Drawing()
     # 심볼 매핑
     sym_map = {
@@ -47,17 +63,25 @@ def drawDiagram(voltage, comps,wires, power_plus=None, power_minus=None):
         'VoltageSource': e.SourceV
     }
     
+    # 안전 처리: 와이어가 None이면 빈 리스트로 초기화
+    if wires is None:
+        wires = []
+    
     # 0) 컴포넌트 위치 계획
     comp_positions = {}
     x_start = 1
     for idx, comp in enumerate(comps):
-        comp_positions[comp['name']] = x_start + idx * 2
-    
+        # 전원 소자는 고정 위치 사용
+        if comp.get('class') == 'VoltageSource' and 'x' in comp:
+            comp_positions[comp['name']] = comp['x']
+        else:
+            comp_positions[comp['name']] = x_start + idx * 2
+
     # 전원 위치 설정
     power_x = 0
-    if power_plus and power_plus[1] > 0:
+    if power_plus and power_plus[1] is not None:
         power_x = power_plus[1]
-    elif power_minus and power_minus[1] > 0:
+    elif power_minus and power_minus[1] is not None:
         power_x = power_minus[1]
     else:
         # 기본 전원 위치
@@ -65,14 +89,20 @@ def drawDiagram(voltage, comps,wires, power_plus=None, power_minus=None):
         power_x = max_comp_x + 2
     
     # 1) 필요한 노드와 범위 파악
-    #nets = sorted({n for comp in comps for n in comp['nodes']})
     # — 컴포넌트 노드 + 전원 터미널 네트 포함 —
     net_set = {n for comp in comps for n in comp['nodes']}
-    if power_plus:   net_set.add(power_plus[0])
-    if power_minus:  net_set.add(power_minus[0])
-    # (선택) 와이어 네트까지 포함하려면, drawDiagram 호출 시 wires 인자를 추가로 넘기고:
+    
+    # 전원 터미널 네트워크 추가
+    if power_plus and power_plus[0] is not None:
+        net_set.add(power_plus[0])
+    if power_minus and power_minus[0] is not None:
+        net_set.add(power_minus[0])
+    
+    # 와이어로 연결된 네트워크 추가
     if wires:
-        for u,v in wires: net_set.update((u,v))
+        for u, v in wires:
+            net_set.update((u, v))
+    
     nets = sorted(net_set)
     y_positions = {n: -i * 1.5 for i, n in enumerate(nets)}
     
@@ -86,31 +116,36 @@ def drawDiagram(voltage, comps,wires, power_plus=None, power_minus=None):
         for node in comp['nodes']:
             node_connections[node].append(x_pos)
     
-    # 전원 위치 고려
-    if power_plus:
-        net_plus = power_plus[0]
-        if net_plus in node_connections:
-            node_connections[net_plus].append(power_x)
+
+
+        # 전원 위치 추가 (플러스·마이너스 터미널에 지정된 x 위치 사용)
+    if power_plus and power_plus[0] in node_connections and power_plus[1] is not None:
+        node_connections[power_plus[0]].append(power_plus[1])
+
+    if power_minus and power_minus[0] in node_connections and power_minus[1] is not None:
+        node_connections[power_minus[0]].append(power_minus[1])
     
-    if power_minus:
-        net_minus = power_minus[0]
-        if net_minus in node_connections:
-            node_connections[net_minus].append(power_x)
+    # 와이어 연결 고려 - 임시 줄 추가하기 위한 가상 x 위치
+    if wires:
+        for u, v in wires:
+            # 두 노드가 같은 위치에 있는 연결점을 가지고 있는지 확인
+            common_positions = set(node_connections[u]) & set(node_connections[v])
+            if not common_positions:
+                # 공통 위치가 없으면 가상 연결점 만들기
+                # 두 노드 각각의 첫 번째 연결점 사이의 중간 지점에 가상 연결점 설정
+                if node_connections[u] and node_connections[v]:
+                    x_u = min(node_connections[u])
+                    x_v = min(node_connections[v])
+                    virtual_x = (x_u + x_v) / 2
+                    node_connections[u].append(virtual_x)
+                    node_connections[v].append(virtual_x)
     
     # 2) 개선된 버스 라인 그리기 - 연결 포인트 사이에만 선 그리기
     for n, y in y_positions.items():
-        # 연결 포인트 정렬
-        points = sorted(node_connections[n])
-        
-        if len(points) > 1:  # 최소 2개 이상의 연결점이 있어야 선을 그림
-            # 연속된 연결점 사이에 선 그리기
-            for i in range(len(points) - 1):
-                start_x = points[i]
-                end_x = points[i + 1]
-                # 충분히 가까운 점들은 연결하지 않음 (같은 컴포넌트의 두 연결점으로 간주)
-                if end_x - start_x > 0.1:  # 최소 간격 설정
-                    d += e.Line().at((start_x, y)).to((end_x, y))
-                    
+        xs = node_connections[n]
+        if len(xs) >= 2:
+            x_min, x_max = min(xs), max(xs)
+            d += e.Line().at((x_min, y)).to((x_max, y))
     
     # 3) 컴포넌트 그리기
     for comp in comps:
@@ -132,29 +167,72 @@ def drawDiagram(voltage, comps,wires, power_plus=None, power_minus=None):
         elem = symbol.at((x, y1)).to((x, y2)).label(label)
         d += elem
     
-    # 4) 전원 연결
-    if power_plus is not None and power_minus is not None:
-        # 사용자 지정 위치 사용
-        net_plus, x_plus = power_plus
-        net_minus, x_minus = power_minus
-        
-        # 해당 네트워크의 y 위치 찾기
-        if net_plus in y_positions:
-            y_plus = y_positions[net_plus]
-        else:
-            print(f"Warning: Net {net_plus} not found. Using first net.")
-            y_plus = y_positions[nets[0]]
-            
-        if net_minus in y_positions:
-            y_minus = y_positions[net_minus]
-        else:
-            print(f"Warning: Net {net_minus} not found. Using last net.")
-            y_minus = y_positions[nets[-1]]
-        
-        # 전원 배치 - 두 버스 라인 사이에
-        d += e.SourceV().at((power_x, y_plus)).to((power_x, y_minus)).label(f"{voltage}V")
+
 
     return d
+
+
+# (기존 drawDiagram 아래에 이어서 붙이시면 됩니다)
+def draw_connectivity_graph(comps, power_plus=None, power_minus=None, output_path=None):
+    """
+    전원(+/–)과 전기 소자를 노드로, 와이어(공통 Net)를 엣지로 그립니다.
+
+    Args:
+        comps: [
+            {'name': str, 'class': str, 'value': float, 'nodes': (net1, net2)},
+            ...
+        ]
+        power_plus: (net_id, x_pos) or None
+        power_minus: (net_id, x_pos) or None
+        output_path: 파일로 저장할 경로 (예: 'graph.png'), None 이면 저장 안 함
+
+    Returns:
+        networkx.Graph 객체
+    """
+    G = nx.Graph()
+    # 1) 컴포넌트 노드 추가
+    for comp in comps:
+        G.add_node(comp['name'], type=comp['class'])
+
+    # 2) 공통 Net을 공유하는 컴포넌트들끼리 엣지 추가
+    for i, c1 in enumerate(comps):
+        for c2 in comps[i+1:]:
+            shared = set(c1['nodes']) & set(c2['nodes'])
+            if shared:
+                G.add_edge(c1['name'], c2['name'], nets=','.join(map(str, shared)))
+
+    # 3) 전원 노드 추가 및 연결
+    if power_plus:
+        net_p, _ = power_plus
+        G.add_node('V+', type='Power+')
+        for comp in comps:
+            if net_p in comp['nodes']:
+                G.add_edge('V+', comp['name'], nets=str(net_p))
+    if power_minus:
+        net_m, _ = power_minus
+        G.add_node('V-', type='Power-')
+        for comp in comps:
+            if net_m in comp['nodes']:
+                G.add_edge('V-', comp['name'], nets=str(net_m))
+
+    # 4) 그리기
+    pos = nx.spring_layout(G, seed=42)
+    plt.figure(figsize=(6,6))
+    nx.draw_networkx_nodes(G, pos, node_size=800,
+                           node_color=['lightgreen' if G.nodes[n].get('type','').startswith('Power') else 'lightblue'
+                                       for n in G.nodes()])
+    nx.draw_networkx_labels(G, pos, font_size=10)
+    nx.draw_networkx_edges(G, pos, width=2)
+    edge_labels = nx.get_edge_attributes(G, 'nets')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels, font_color='red', font_size=8)
+    plt.axis('off')
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=200)
+    plt.show()
+
+    return G
 
 def load_circuit_from_spice(path: str) -> list[dict]:
     comps = []
@@ -187,7 +265,7 @@ def load_circuit_from_spice(path: str) -> list[dict]:
                         continue
                 cls = 'VoltageSource'
             else:
-                # 일반 소자: 토큰[3]에 값이 있다고 가정
+                # 일반 소자: 토큰[3]에 값이 있다고
                 try:
                     val = float(tokens[3])
                 except (IndexError, ValueError):
