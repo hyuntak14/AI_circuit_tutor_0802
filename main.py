@@ -412,6 +412,24 @@ def main():
             for x, y in entry['pts']:
                 hole_to_net[(int(round(x)), int(round(y)))] = net_id
 
+
+     # ─── 2) Union-Find 초기화 & net 색상 매핑 ────────────
+    parent = { net_id: net_id for net_id in set(hole_to_net.values()) }
+    def find(u):
+        if parent[u] != u:
+            parent[u] = find(parent[u])
+        return parent[u]
+
+    import numpy as np
+    rng = np.random.default_rng(1234)
+    final_nets = set(find(n) for n in hole_to_net.values())
+    net_colors = {
+        net_id: tuple(int(c) for c in rng.integers(0, 256, 3))
+        for net_id in final_nets
+    }
+
+
+
     for cls, _, box in all_comps:
         x1, y1, x2, y2 = box
         expected = 8 if cls == 'IC' else 2
@@ -486,29 +504,50 @@ def main():
 
     def redraw():
         img = result_base.copy()
+        # (a) 컴포넌트 박스와 현재 핀 위치 그리기
         for comp in component_pins:
             x1,y1,x2,y2 = comp['box']
             color = class_colors.get(comp['class'], (0,255,255))
             cv2.rectangle(img, (x1,y1), (x2,y2), color, 2)
             for px,py in comp['pins']:
                 cv2.circle(img, (px,py), 5, (0,255,0), -1)
-        cv2.imshow('Fix Pins', img)
+
+        # (b) net 매핑 오버레이
+        overlay = img.copy()
+        for comp in component_pins:
+            for pt in comp['pins']:
+                # 가장 가까운 hole_to_net 키 찾기
+                closest = min(
+                    hole_to_net.keys(),
+                    key=lambda h: (h[0]-pt[0])**2 + (h[1]-pt[1])**2
+                )
+                raw_net = hole_to_net[closest]
+                net_id = find(raw_net)
+                c = net_colors.get(net_id, (255,255,255))
+                cv2.circle(overlay, pt, 8, c, -1)
+                cv2.putText(overlay, str(net_id),
+                            (pt[0]+8, pt[1]-8),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5, c, 2)
+
+        # (c) 블렌딩 후 화면에 띄우기
+        alpha = 0.6
+        blended = cv2.addWeighted(overlay, alpha, img, 1-alpha, 0)
+        cv2.imshow('Fix Pins', blended)
 
     def on_mouse(event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
             for comp in component_pins:
                 x1,y1,x2,y2 = comp['box']
                 if x1<=x<=x2 and y1<=y<=y2:
-                    # (1) 기존 점 즉시 삭제 및 화면 반영
+                    # 1) 기존 핀 삭제
                     comp['pins'] = []
                     redraw()
-
-                    # (2) 수동 입력
+                    # 2) 수동 핀 선택
                     expected = 8 if comp['class']=='IC' else 2
                     new_pins = manual_pin_selection(orig, comp['box'], expected)
-
-                    # (3) 새 점만 저장 및 재그리기
                     comp['pins'] = new_pins or []
+                    # 3) 갱신된 핀+netz 다시 그림
                     redraw()
                     break
 
@@ -548,8 +587,7 @@ def main():
     for comp, (_,_,box) in zip(component_pins, new_dets):
         comp['box'] = box
 
-    visualize_component_nets(warped_raw, component_pins, hole_to_net, parent, find)
-
+    
     # ———————————————— 전원 단자 클릭 입력 ————————————————
     from diagram import get_n_clicks
     # ———— ① 모든 엔드포인트 수집 ————
