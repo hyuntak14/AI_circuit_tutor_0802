@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 from diagram import draw_connectivity_graph
 import glob
 from checker.Circuit_comparer import CircuitComparer
-
 def generate_circuit(
     all_comps: list,
     holes: list,
@@ -21,48 +20,46 @@ def generate_circuit(
     output_spice: str,
     output_img: str,
     hole_to_net: dict,
-    power_plus: tuple[int, float] = None,
-    power_minus: tuple[int, float] = None
+    power_pairs: list[tuple[int, float, int, float]] = None  # [(net_p, x_p, net_m, x_m), ...]
 ):
-    # 1) hole → (row, net) 매핑
-    
+    # 1) wires 기반 넷 병합 (Union-Find)
+    parent = {net: net for net in set(hole_to_net.values())}
 
-    # 2) wires 기반 넷 병합 (Union-Find)
-    parent = { net: net for net in set(hole_to_net.values()) }
     def find(u):
         if parent[u] != u:
             parent[u] = find(parent[u])
         return parent[u]
+
     def union(u, v):
         pu, pv = find(u), find(v)
         if pu != pv:
             parent[pv] = pu
+
     print("=== Wire Connections (Net Unions) ===")
     for net1, net2 in wires:
         print(f"Union: {net1} <--> {net2}")
         union(net1, net2)
 
-    # 2.5) 전원 단자의 net ID 도 Union-Find 대표 ID 로 매핑
-    if power_plus is not None:
-        raw_np, x_np = power_plus
-        power_plus = (find(raw_np), x_np)
-    if power_minus is not None:
-        raw_nm, x_nm = power_minus
-        power_minus = (find(raw_nm), x_nm)
+    # 2) 전원 net 매핑
+    mapped_powers = []
+    for raw_np, x_np, raw_nm, x_nm in power_pairs or []:
+        mapped_powers.append((find(raw_np), x_np, find(raw_nm), x_nm))
+    power_pairs = mapped_powers
 
-
-    # 3) 컴포넌트 필터링 및 매핑 (Line_area 제외)
+    # 3) 컴포넌트 필터링 및 매핑
     comps = [c for c in all_comps if c['class'] != 'Line_area']
     mapped = []
     for idx, comp in enumerate(comps, start=1):
         pin_a, pin_b = comp['pins']
+
         def nearest_net(pt):
             x, y = pt
-            closest = min(hole_to_net.keys(), key=lambda h: (h[0]-x)**2 + (h[1]-y)**2)
+            closest = min(hole_to_net.keys(), key=lambda h: (h[0] - x) ** 2 + (h[1] - y) ** 2)
             return find(hole_to_net[closest])
+
         node1 = nearest_net(pin_a)
         node2 = nearest_net(pin_b)
-        prefix = {'Resistor':'R','Diode':'D','LED':'L','Capacitor':'C','IC':'U'}.get(comp['class'], 'X')
+        prefix = {'Resistor': 'R', 'Diode': 'D', 'LED': 'L', 'Capacitor': 'C', 'IC': 'U','VoltageSource': 'V', 'V+': 'V','V-': 'V'}.get(comp['class'], 'X')
         name = f"{prefix}{idx}"
         mapped.append({
             'name': name,
@@ -71,13 +68,12 @@ def generate_circuit(
             'nodes': (node1, node2)
         })
 
-    # 3.5) 연결 정보 출력
     print("=== Component to Net Mapping ===")
     for comp in mapped:
         print(f"{comp['name']} ({comp['class']}): Net1={comp['nodes'][0]}, Net2={comp['nodes'][1]}")
 
-    # 4) DataFrame 생성: 두 핀 모두 컬럼에 저장
-    df = pd.DataFrame([{  
+    # 4) DataFrame 구성
+    df = pd.DataFrame([{
         'name': m['name'],
         'class': m['class'],
         'value': m['value'],
@@ -85,86 +81,88 @@ def generate_circuit(
         'node2_n': m['nodes'][1],
     } for m in mapped])
 
-    # ❶ 그래프 생성
+    # 5) 그래프 저장
     G = build_circuit_graph(mapped)
     save_circuit_graph(G, output_img.replace('.jpg', '.graphml'))
-    # ❷ (선택) 파일로 저장
-    write_graphml(G, output_img.replace('.jpg','.graphml'))
-    # 또는 네트워크 직렬화: nx.write_gpickle(G, 'circuit.pkl')
+    write_graphml(G, output_img.replace('.jpg', '.graphml'))
 
-    #실습 주제 회로와 비교하는 부분
+    # 6) 비교
     try:
-        graphml_dir = "checker"  # 실습 회로들이 저장된 폴더
-        graphml_files = glob.glob(os.path.join(graphml_dir, "*.graphml"))
-
-        if not graphml_files:
-            print("[비교] 비교 대상 .graphml 파일이 없습니다.")
-        else:
-            similarity_list = []
-            for path in graphml_files:
+        import glob
+        graphml_dir = "checker"
+        files = glob.glob(os.path.join(graphml_dir, "*.graphml"))
+        if files:
+            
+            sims = []
+            for f in files:
                 try:
-                    G_manual = nx.read_graphml(path)
-                    comparer = CircuitComparer(G, G_manual)
-                    sim = comparer.compute_similarity(alpha=0.5)
-                    similarity_list.append((os.path.basename(path), sim))
+                    G2 = nx.read_graphml(f)
+                    sim = CircuitComparer(G, G2).compute_similarity()
+                    sims.append((os.path.basename(f), sim))
                 except Exception as e:
-                    print(f"[비교 실패] {path}: {e}")
-
-            # 유사도 높은 순 정렬
-            similarity_list.sort(key=lambda x: -x[1])
+                    print(f"[비교 실패] {f}: {e}")
+            sims.sort(key=lambda x: -x[1])
             print("\n[유사도 TOP 3 회로]")
-            for i, (fname, score) in enumerate(similarity_list[:3]):
-                print(f"{i+1}. {fname} → 유사도: {score:.3f}")
-
+            for i, (f, score) in enumerate(sims[:3]):
+                print(f"{i+1}. {f} → 유사도: {score:.3f}")
+        else:
+            print("[비교] 비교 대상 .graphml 없음")
     except Exception as e:
-        print(f"[오류] 회로 비교 중 오류 발생: {e}")
+        print(f"[오류] 회로 비교 실패: {e}")
 
-
-    # 5) SPICE 넷리스트 생성
+    # 7) SPICE 저장
     toSPICE(df, voltage, output_spice)
 
+    # 8) 전원별 회로도 및 연결 그래프 시각화
+    for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs, 1):
+        path = output_img.replace('.jpg', f'_pwr{i}.jpg')
+        draw_connectivity_graph(mapped, power_plus=(net_p, x_p), power_minus=(net_m, x_m),
+                                output_path=path.replace('.jpg', '_graph.png'))
+        d = drawDiagram(voltage, mapped, wires, power_plus=(net_p, x_p), power_minus=(net_m, x_m))
+        d.draw()
+        d.save(path)
 
-
-    # 6) 회로도 이미지 생성 (flat list 사용)
-    # 6-1 노드 - 엣지 형태로 생성
-
-
-    # mapped: generate_circuit()에서 반환된 mapped 리스트
-    # power_plus, power_minus: 동일하게 전달된 값
-    G = draw_connectivity_graph(
-        mapped,
-        power_plus=power_plus,
-        power_minus=power_minus,
-        output_path='connectivity_graph.png'   # 파일로도 저장하고 싶으면 경로 지정
-    )
-
-    drawing = drawDiagram(voltage, mapped,wires,power_plus=power_plus,power_minus=power_minus)
-    drawing.draw()          # 도면을 렌더링합니다 (schemdraw 내부적으로 필요 시 생략 가능)
-    drawing.save(output_img)  # 파일로 바로 저장
-
-    # 7) 선택적 해석: 레벨별 리스트 구성 후 호출
+    # 9) 전류·전압 해석
     circuit_levels = []
     for lvl, grp in df.groupby('node1_n', sort=False):
-        level_comps = []
+        comps = []
         for _, row in grp.iterrows():
-            level_comps.append({
+            comps.append({
                 'name': row['name'],
                 'value': int(row['value']),
                 'class': row['class']
             })
-        circuit_levels.append(level_comps)
+        circuit_levels.append(comps)
+
     R_th, I_tot, node_currents = calcCurrentAndVoltage(voltage, circuit_levels)
     print(f"[Circuit] 등가저항: {R_th}, 전체전류: {I_tot}")
     print("=== Node Voltages/ Currents per Level ===")
-    for lvl_idx, currents in enumerate(node_currents):
-        print(f"Level {lvl_idx+1}: currents = {currents}")
+    for i, c in enumerate(node_currents):
+        print(f"Level {i+1}: currents = {c}")
+
     return mapped, hole_to_net
 
+
 def build_circuit_graph(mapped_comps):
+
     G = nx.Graph()
+
+    
     # 1) 노드 추가 (nets 튜플 → 문자열)
     for comp in mapped_comps:
-        nets_str = ','.join(map(str, comp['nodes']))
+        n1, n2 = comp['nodes']
+        nets_str = f"{n1},{n2}"
+
+        # V+/V- 이름 변환 로직
+        cls = comp['class']
+        if cls == 'VoltageSource':
+            if comp.get('value', 0) > 0:
+                cls = 'V+'
+            elif comp.get('value', 0) == 0:
+                cls = 'V-'
+
+
+        #nets_str = ','.join(map(str, comp['nodes']))
         G.add_node(comp['name'],
                    comp_class=comp['class'],
                    value=comp['value'],

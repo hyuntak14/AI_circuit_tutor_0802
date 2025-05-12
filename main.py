@@ -551,46 +551,76 @@ def main():
     visualize_component_nets(warped_raw, component_pins, hole_to_net, parent, find)
 
     # ———————————————— 전원 단자 클릭 입력 ————————————————
-    from diagram import get_n_clicks  # 또는 main.py에 이미 있던 get_two_clicks
-
-    plus_pt, minus_pt = get_n_clicks(
-        warped_raw,
-        'Select Power Terminals',
-        ['Click + terminal', 'Click - terminal']
-    )
-
-       # ———— ① 모든 엔드포인트 수집 ————
-   # component_pins 안의 'pins' 리스트(와이어 끝점, 소자 핀 위치)를 모두 합침
+    from diagram import get_n_clicks
+    # ———— ① 모든 엔드포인트 수집 ————
+    # component_pins 안의 'pins' 리스트(와이어 끝점, 소자 핀 위치)를 모두 합칩니다.
     all_endpoints = [
         pt
         for comp in component_pins
         for pt   in comp['pins']
     ]
 
-    # ———— ② 클릭 위치 주변 최단거리 엔드포인트 찾기 ————
-    closest_plus  = min(all_endpoints,
-                        key=lambda p: (p[0]-plus_pt[0])**2 + (p[1]-plus_pt[1])**2)
-    closest_minus = min(all_endpoints,
-                        key=lambda p: (p[0]-minus_pt[0])**2 + (p[1]-minus_pt[1])**2)
-    
+    # ———— ② UI로 필요한 전원 소스 개수 입력받기 ————
+    root = tk.Tk()
+    root.withdraw()
+    source_count = simpledialog.askinteger(
+        "전원 개수 입력",
+        "필요한 전원 소스 수를 입력하세요:",
+        minvalue=1, initialvalue=1
+    ) or 1
+    root.destroy()
+
+    # ———— ③ source_count에 맞춰 +/– 클릭 프롬프트 리스트 생성 ————
+    prompts = []
+    for i in range(1, source_count + 1):
+        prompts.append(f"Click + terminal of source {i}")
+        prompts.append(f"Click - terminal of source {i}")
+
+    # ———— ④ 다중 클릭으로 좌표 수집 ————
+    all_pts = get_n_clicks(
+        warped_raw,
+        'Select Power Terminals',
+        prompts
+    )
+
+    # ———— ⑤ 짝수 인덱스 → plus_pts, 홀수 인덱스 → minus_pts ————
+    plus_pts  = all_pts[0::2]
+    minus_pts = all_pts[1::2]
+
+    power_pairs = []
+    img_w = warped_raw.shape[1]
+    comp_count = len([c for c in component_pins if c['class'] != 'Line_area'])
+    grid_width = comp_count * 2 + 2
+
+    for plus_pt, minus_pt in zip(plus_pts, minus_pts):
+        # 클릭한 위치에서 가장 가까운 실제 엔드포인트 찾기
+        closest_plus = min(all_endpoints, key=lambda p: (p[0]-plus_pt[0])**2 + (p[1]-plus_pt[1])**2)
+        closest_minus = min(all_endpoints, key=lambda p: (p[0]-minus_pt[0])**2 + (p[1]-minus_pt[1])**2)
+
+        # 네트워크 ID 매핑
+        net_plus = nearest_net(closest_plus)
+        net_minus = nearest_net(closest_minus)
+
+        # schemdraw용 그리드 좌표로 변환
+        x_plus_grid = closest_plus[0]  / img_w * grid_width
+        x_minus_grid = closest_minus[0] / img_w * grid_width
+
+        # 리스트에 추가
+        power_pairs.append((net_plus, x_plus_grid, net_minus, x_minus_grid))
+        # 전원 소자도 component_pins에 추가 (V+, V- 클래스로)
 
 
+        # 전원 소자도 component_pins에 추가 (단일 VoltageSource)
 
-    # (선택) 디버그용—매칭된 엔드포인트 시각화
-    cv2.circle(warped_raw, closest_plus,  7, (255,0,0), -1)
-    cv2.circle(warped_raw, closest_minus, 7, (255,0,0), -1)
+        # 시각화 (디버그용 — 필요시 생략 가능)
+        cv2.circle(warped_raw, plus_pt,        5, (0,0,255),  -1)
+        cv2.circle(warped_raw, closest_plus,   7, (255,0,0),  -1)
+        cv2.line(  warped_raw, plus_pt, closest_plus, (0,255,0), 2)
 
-        # ———— ②-1 시각화: 클릭 &#x2192; 매칭 엔드포인트 표시 ————
-    # 클릭 위치: 빨간색, 매칭된 점: 파란색, 연결선: 녹색
-    cv2.circle(warped_raw, plus_pt,        5, (0,0,255),  -1)  # + 터미널 클릭 위치
-    cv2.circle(warped_raw, closest_plus,   7, (255,0,0),  -1)  # + 에 매핑된 엔드포인트
-    cv2.line(  warped_raw, plus_pt, closest_plus, (0,255,0), 2)  # 두 점 연결선
+        cv2.circle(warped_raw, minus_pt,       5, (0,0,255),  -1)
+        cv2.circle(warped_raw, closest_minus,  7, (255,0,0),  -1)
+        cv2.line(  warped_raw, minus_pt, closest_minus, (0,255,0), 2)
 
-    cv2.circle(warped_raw, minus_pt,       5, (0,0,255),  -1)  # - 터미널 클릭 위치
-    cv2.circle(warped_raw, closest_minus,  7, (255,0,0),  -1)  # - 에 매핑된 엔드포인트
-    cv2.line(  warped_raw, minus_pt, closest_minus, (0,255,0), 2)  # 두 점 연결선
-
-    # 시각화 창 띄우기 (원하면 이 줄 제거)
     cv2.imshow('Power-Terminal Mapping', warped_raw)
     cv2.waitKey(0)
     cv2.destroyWindow('Power-Terminal Mapping')
@@ -607,7 +637,10 @@ def main():
     x_plus_grid  = closest_plus[0]  / img_w * grid_width
     x_minus_grid = closest_minus[0] / img_w * grid_width
 
-    # ———————————————— 회로도 생성 (전원 위치 넘김) ————————————————
+    #클래스명 변경(generate_circuit에 맞게게)
+  
+
+    ## ———————————————— 회로도 생성 (전원 위치 넘김) ————————————————
     components, nets = generate_circuit(
         component_pins,
         holes, wires,
@@ -615,8 +648,7 @@ def main():
         'circuit.spice',
         'circuit.jpg',
         hole_to_net,
-        power_plus =(net_plus,  x_plus_grid),
-        power_minus=(net_minus, x_minus_grid)
+        power_pairs
     )
 
     for comp in component_pins:

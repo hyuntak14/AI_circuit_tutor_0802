@@ -16,7 +16,7 @@ class CircuitSaver:
         self.next_node_id = 1
         self.edge_start = None
         self.canvas = 255 * np.ones((canvas_size[1], canvas_size[0], 3), dtype=np.uint8)
-        self.class_options = ['V+','V-','Resistor', 'Capacitor', 'Diode', 'LED', 'IC']
+        self.class_options = ['VoltageSource','V-','Resistor', 'Capacitor', 'Diode', 'LED', 'IC']
 
         self.ua741_pins = {
             1: 'Offset Null', 2: 'Inverting', 3: 'Non-inverting',
