@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d0" for="node" attr.name="type" attr.type="string"/>
+<graph edgedefault="undirected"><node id="N1">
+  <data key="d0">V+</data>
+</node>
+<node id="N2">
+  <data key="d0">V-</data>
+</node>
+<node id="N3">
+  <data key="d0">Resistor</data>
+</node>
+<node id="N4">
+  <data key="d0">Resistor</data>
+</node>
+<node id="N5">
+  <data key="d0">Resistor</data>
+</node>
+<edge source="N1" target="N3"/>
+<edge source="N2" target="N4"/>
+<edge source="N2" target="N5"/>
+<edge source="N3" target="N4"/>
+<edge source="N3" target="N5"/>
+</graph></graphml>

@@ -1,4 +1,5 @@
 # circuit_generator.py (전체 수정)
+import os
 import pandas as pd
 import numpy as np
 from detector.hole_detector import HoleDetector
@@ -9,6 +10,8 @@ import networkx as nx
 from networkx.readwrite import write_graphml
 import matplotlib.pyplot as plt
 from diagram import draw_connectivity_graph
+import glob
+from checker.Circuit_comparer import CircuitComparer
 
 def generate_circuit(
     all_comps: list,
@@ -88,6 +91,34 @@ def generate_circuit(
     # ❷ (선택) 파일로 저장
     write_graphml(G, output_img.replace('.jpg','.graphml'))
     # 또는 네트워크 직렬화: nx.write_gpickle(G, 'circuit.pkl')
+
+    #실습 주제 회로와 비교하는 부분
+    try:
+        graphml_dir = "checker"  # 실습 회로들이 저장된 폴더
+        graphml_files = glob.glob(os.path.join(graphml_dir, "*.graphml"))
+
+        if not graphml_files:
+            print("[비교] 비교 대상 .graphml 파일이 없습니다.")
+        else:
+            similarity_list = []
+            for path in graphml_files:
+                try:
+                    G_manual = nx.read_graphml(path)
+                    comparer = CircuitComparer(G, G_manual)
+                    sim = comparer.compute_similarity(alpha=0.5)
+                    similarity_list.append((os.path.basename(path), sim))
+                except Exception as e:
+                    print(f"[비교 실패] {path}: {e}")
+
+            # 유사도 높은 순 정렬
+            similarity_list.sort(key=lambda x: -x[1])
+            print("\n[유사도 TOP 3 회로]")
+            for i, (fname, score) in enumerate(similarity_list[:3]):
+                print(f"{i+1}. {fname} → 유사도: {score:.3f}")
+
+    except Exception as e:
+        print(f"[오류] 회로 비교 중 오류 발생: {e}")
+
 
     # 5) SPICE 넷리스트 생성
     toSPICE(df, voltage, output_spice)

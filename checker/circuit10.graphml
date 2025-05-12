@@ -1,0 +1,62 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d6" for="edge" attr.name="source_pin" attr.type="long"/>
+<key id="d5" for="edge" attr.name="target_pin" attr.type="long"/>
+<key id="d4" for="edge" attr.name="target_pin" attr.type="string"/>
+<key id="d3" for="edge" attr.name="source_pin" attr.type="string"/>
+<key id="d2" for="node" attr.name="model" attr.type="string"/>
+<key id="d1" for="node" attr.name="value" attr.type="double"/>
+<key id="d0" for="node" attr.name="type" attr.type="string"/>
+<graph edgedefault="directed"><node id="V1">
+  <data key="d0">V+</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="R2">
+  <data key="d0">Resistor</data>
+  <data key="d1">100.0</data>
+</node>
+<node id="I3">
+  <data key="d0">IC</data>
+  <data key="d1">0.0</data>
+  <data key="d2">ua741</data>
+</node>
+<node id="R4">
+  <data key="d0">Resistor</data>
+  <data key="d1">1.0</data>
+</node>
+<node id="C5">
+  <data key="d0">Capacitor</data>
+  <data key="d1">2.0</data>
+</node>
+<node id="R6">
+  <data key="d0">Resistor</data>
+  <data key="d1">2.0</data>
+</node>
+<node id="L7">
+  <data key="d0">LED</data>
+  <data key="d1">0.0</data>
+</node>
+<edge source="V1" target="R2">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+<edge source="R2" target="I3">
+  <data key="d3"></data>
+  <data key="d5">1</data>
+</edge>
+<edge source="I3" target="C5">
+  <data key="d6">1</data>
+  <data key="d4"></data>
+</edge>
+<edge source="R4" target="I3">
+  <data key="d3"></data>
+  <data key="d5">3</data>
+</edge>
+<edge source="R6" target="I3">
+  <data key="d3"></data>
+  <data key="d5">8</data>
+</edge>
+<edge source="L7" target="I3">
+  <data key="d3"></data>
+  <data key="d5">4</data>
+</edge>
+</graph></graphml>

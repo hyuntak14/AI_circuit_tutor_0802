@@ -18,6 +18,7 @@ from circuit_generator import generate_circuit
 from detector.diode_detector import ResistorEndpointDetector as DiodeEndpointDetector
 from detector.ic_chip_detector import ICChipPinDetector
 from checker.error_checker import ErrorChecker
+
 import random
 
 # 소자별 색상 (data.yaml 기준)
@@ -396,14 +397,10 @@ def main():
     # 1) 구멍 좌표 검출
     holes = hole_det.detect_holes(warped_raw)
     # 2) 전체 넷 클러스터링
-    nets, row_nets  = hole_det.get_board_nets(holes,base_img=warped_raw, show=True)
+    nets, row_nets  = hole_det.get_board_nets(holes,base_img=warped_raw, show=False)
 
     # 2-1) 행별 그룹(cluster) 생성 (template alignment 적용된 points 기준)
-    hole_det.visualize_clusters(
-    base_img=warped_raw,
-    clusters=nets,
-    affine_pts=holes  # affine 점까지 같이 표시하고 싶으면
-)
+    #hole_det.visualize_clusters(base_img=warped_raw,clusters=nets,affine_pts=holes )
 
 
 

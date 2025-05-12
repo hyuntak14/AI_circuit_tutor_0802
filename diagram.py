@@ -1,5 +1,7 @@
 import matplotlib
-matplotlib.use('Agg')
+#matplotlib.use('Agg')
+matplotlib.use('Qt5Agg')
+
 import matplotlib.pyplot as plt
 import cv2
 import schemdraw
