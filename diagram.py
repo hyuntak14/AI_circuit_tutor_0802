@@ -8,6 +8,10 @@ import schemdraw
 import schemdraw.elements as e
 import networkx as nx
 import argparse
+from io import BytesIO
+import numpy as np
+from PIL import Image
+import cv2
 
 def get_n_clicks(img, window_name, prompts):
     """
@@ -296,6 +300,29 @@ def draw_from_spice(spice_path, wires=None, power_plus=None, power_minus=None, o
         d.draw()
         d.save(output_path)
     return d
+
+
+def render_drawing_to_cv2(drawing: schemdraw.Drawing, dpi: int = 200) -> np.ndarray:
+    """
+    Schemdraw Drawing 객체를 PIL→OpenCV BGR 이미지(Numpy)로 변환하여 반환합니다.
+
+    사용 예)
+        d = draw_circuit_from_connectivity(comps, power_plus, power_minus)
+        img = render_drawing_to_cv2(d)
+    """
+    # 1) 내부적으로 matplotlib에 그리기
+    drawing.draw()
+    # 2) Figure 객체 추출
+    fig = drawing.fig
+    # 3) 메모리 버퍼에 PNG로 저장
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=dpi, bbox_inches='tight')
+    buf.seek(0)
+    # 4) PIL로 읽어서 numpy array 변환
+    pil_img = Image.open(buf).convert('RGB')
+    arr = np.array(pil_img)
+    # 5) RGB → BGR(OpenCV)로 변환
+    return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
 
 def create_example_circuit(circuit_type='voltage_divider') -> list[dict]:
