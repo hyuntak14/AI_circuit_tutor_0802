@@ -20,6 +20,7 @@ from detector.ic_chip_detector import ICChipPinDetector
 from checker.error_checker import ErrorChecker
 
 import random
+WINDOW = 'AR Tutor'
 
 # 소자별 색상 (data.yaml 기준)
 class_colors = {
@@ -77,24 +78,6 @@ def visualize_component_nets(img, component_pins, hole_to_net, parent, find):
     cv2.waitKey(0)
     cv2.destroyWindow('Component ↔ Net Mapping')
 
-
-def get_two_clicks(img, window_name, prompts):
-    pts = []
-    clone = img.copy()
-    def click_event(event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            pts.append((x, y))
-            cv2.circle(clone, (x, y), 5, (0, 0, 255), -1)
-            cv2.imshow(window_name, clone)
-            if len(pts) >= len(prompts):
-                cv2.destroyWindow(window_name)
-    cv2.namedWindow(window_name)
-    cv2.imshow(window_name, clone)
-    cv2.setMouseCallback(window_name, click_event)
-    for prompt in prompts:
-        print(prompt)
-    cv2.waitKey(0)
-    return pts[0], pts[1]
 
 def visualize_cluster_connections(row_nets, component_pins):
     # 1) 전체 net_id 추출 & 색상 매핑
@@ -210,7 +193,8 @@ def unified_labeler(image, class_colors, initial_labels=None):
             cv2.rectangle(canvas, (x1,y1), (x2,y2), color, 2)
             cv2.putText(canvas, cls, (x1, y1-10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        cv2.imshow(win, canvas)
+        cv2.imshow(WINDOW, canvas)
+        
 
     def mouse_cb(event, x, y, flags, param):
         nonlocal drawing, ix, iy, labels
@@ -220,7 +204,7 @@ def unified_labeler(image, class_colors, initial_labels=None):
         elif event == cv2.EVENT_MOUSEMOVE and drawing:
             tmp = canvas.copy()
             cv2.rectangle(tmp, (ix,iy), (x,y), (255,255,255), 1)
-            cv2.imshow(win, tmp)
+            cv2.imshow(WINDOW, tmp)
         elif event == cv2.EVENT_LBUTTONUP and drawing:
             drawing = False
             x1_, x2_ = sorted([ix, x])
@@ -254,12 +238,16 @@ def unified_labeler(image, class_colors, initial_labels=None):
                     break
             redraw()
 
-    cv2.namedWindow(win)
-    cv2.setMouseCallback(win, mouse_cb)
+
+    cv2.setMouseCallback(WINDOW, mouse_cb)
     redraw()
-    cv2.waitKey(0)
-    cv2.destroyWindow(win)
+    while True:
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
     return labels
+
+
 def modify_detections(image, detections):
     """
     • image: 원본 영상 (np.ndarray)
@@ -298,7 +286,7 @@ def modify_detections(image, detections):
             cv2.rectangle(canvas, (x1,y1), (x2,y2), color, 2)
             cv2.putText(canvas, cls, (x1, y1-5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        cv2.imshow(win, canvas)
+        cv2.imshow(WINDOW, canvas)
 
     def mouse_cb(event, x, y, flags, param):
         nonlocal drawing, ix, iy, detections
@@ -336,7 +324,7 @@ def modify_detections(image, detections):
                 detections.append((cls, 1.0, (x1_, y1_, x2_, y2_)))
             redraw()
 
-    win = "Modify Detections"
+    '''win = "Modify Detections"
     cv2.namedWindow(win)
     cv2.setMouseCallback(win, mouse_cb)
     redraw()
@@ -346,12 +334,13 @@ def modify_detections(image, detections):
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-    cv2.destroyWindow(win)
+    cv2.destroyWindow(win)'''
     return detections
 
 
 
 def main():
+    
     component_pins = []
     root = tk.Tk()
     root.withdraw()
@@ -371,7 +360,7 @@ def main():
     ic_det       = ICChipPinDetector()       # IC 칩 핀 위치 detector
 
     # 이미지 로드 및 브레드보드 검출
-    img = imread_unicode(r'D:\Hyuntak\연구실\AR 회로 튜터\breadboard_project\breadboard18.jpg')
+    img = imread_unicode(r'D:\Hyuntak\연구실\AR 회로 튜터\breadboard_project\breadboard99.jpg')
     comps = detector.detect(img)
     bb = next((b for c,_,b in comps if c.lower()=='breadboard'), None)
     if bb is None:
@@ -390,6 +379,8 @@ def main():
         cv2.rectangle(vis_img, (x1,y1), (x2,y2), color, 2)
         cv2.putText(vis_img, cls, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
+    cv2.namedWindow(WINDOW)
+
     final_labels = unified_labeler(vis_img, class_colors, auto_comps[:])
     all_comps = [(cls, 1.0, box) for cls, box in final_labels]
     all_comps = modify_detections(warped, all_comps)
@@ -402,7 +393,7 @@ def main():
     # 2-1) 행별 그룹(cluster) 생성 (template alignment 적용된 points 기준)
     #hole_det.visualize_clusters(base_img=warped_raw,clusters=nets,affine_pts=holes )
 
-
+    
 
     # hole_to_net 맵 생성
     hole_to_net = {}
@@ -442,11 +433,17 @@ def main():
         elif cls == 'Diode':
             pins = diode_det.extract(warped, box)
         elif cls == 'IC':
-            roi = warped[y1:y2, x1:x2]
-            ic_detections = ic_det.detect(roi)
-            if ic_detections:
-                pts = ic_detections[0]['pin_points']
-                pins = [(x1 + px, y1 + py) for px, py in pts]
+            x1, y1, x2, y2 = box  # 수정된 부분
+            roi = warped_raw[y1:y2, x1:x2]
+            ics = ic_det.detect(roi)
+            if ics:
+                det = ics[0]
+                pins = [(x1 + px, y1 + py) for px, py in det['pin_points']]
+
+
+
+
+            
         elif cls == 'Line_area':
             # 선영역: WireDetector로 endpoints 2개 추출
             roi = warped_raw[y1:y2, x1:x2]
@@ -533,7 +530,7 @@ def main():
         # (c) 블렌딩 후 화면에 띄우기
         alpha = 0.6
         blended = cv2.addWeighted(overlay, alpha, img, 1-alpha, 0)
-        cv2.imshow('Fix Pins', blended)
+        cv2.imshow(WINDOW, blended)
 
     def on_mouse(event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -551,13 +548,13 @@ def main():
                     redraw()
                     break
 
-    cv2.namedWindow('Fix Pins')
-    cv2.setMouseCallback('Fix Pins', on_mouse)
+    #cv2.namedWindow('Fix Pins')
+    cv2.setMouseCallback(WINDOW, on_mouse)
     redraw()
     while True:
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-    cv2.destroyWindow('Fix Pins')
+    #cv2.destroyWindow('Fix Pins')
 
 
     def nearest_net(pt):
@@ -617,7 +614,7 @@ def main():
     # ———— ④ 다중 클릭으로 좌표 수집 ————
     all_pts = get_n_clicks(
         warped_raw,
-        'Select Power Terminals',
+        WINDOW,
         prompts
     )
 
@@ -645,6 +642,16 @@ def main():
 
         # 리스트에 추가
         power_pairs.append((net_plus, x_plus_grid, net_minus, x_minus_grid))
+
+        for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs, start=1):
+            component_pins.append({
+                'class': 'VoltageSource',
+                'pins': [],  # 좌표는 사용되지 않으므로 빈 리스트로 둠
+                'value': voltage,
+                'box': (0,0,0,0),  # 임의값
+                'num_idx': 100+i,  # 충돌 피하기 위해 임의 인덱스
+                'name': f'V{i}'
+            })
         # 전원 소자도 component_pins에 추가 (V+, V- 클래스로)
 
 
@@ -659,9 +666,9 @@ def main():
         cv2.circle(warped_raw, closest_minus,  7, (255,0,0),  -1)
         cv2.line(  warped_raw, minus_pt, closest_minus, (0,255,0), 2)
 
-    cv2.imshow('Power-Terminal Mapping', warped_raw)
+    cv2.imshow(WINDOW, warped_raw)
     cv2.waitKey(0)
-    cv2.destroyWindow('Power-Terminal Mapping')
+    #cv2.destroyWindow(WINDOW)
 
     # ———— ③ 네트워크 ID로 매핑 ————
     net_plus  = nearest_net(closest_plus)
@@ -689,18 +696,45 @@ def main():
         power_pairs
     )
 
-    for comp in component_pins:
-        print(f"{comp['class']} @ {comp['box']} → pins={comp['pins']}, value={comp['value']}Ω")
+        # 2) hole_to_net → net_id: [comp_name,…] 형태로 역색인 생성
+    nets_mapping = {}
+    for comp in components:
+        n1, n2 = comp['nodes']
+        nets_mapping.setdefault(n1, []).append(comp['name'])
+        nets_mapping.setdefault(n2, []).append(comp['name'])
 
-    checker = ErrorChecker(components, nets, ground_nodes={0})
+    # 3) power_pairs(plus/minus net) 정보를 이용해 VoltageSource 컴포넌트 추가
+    #    (power_pairs 는 사용자가 클릭해서 얻은 리스트: [(net_p, x_p, net_m, x_m), …])
+    for i, (net_p, _, net_m, _) in enumerate(power_pairs, start=1):
+        vs_name = f"V{i}"
+        vs_comp = {
+            'name': vs_name,
+            'class': 'VoltageSource',
+            'value': voltage,       # 사용자 입력 전압 변수
+            'nodes': (net_p, net_m)
+        }
+        components.append(vs_comp)
+        nets_mapping.setdefault(net_p, []).append(vs_name)
+        nets_mapping.setdefault(net_m, []).append(vs_name)
+
+    # 4) ground_net 을 minus 단자(net_m) 으로 지정
+    ground_net = power_pairs[0][2]
+
+    # 5) 수정된 mapping 으로 ErrorChecker 생성
+    checker = ErrorChecker(components, nets_mapping, ground_nodes={ground_net})
     errors = checker.run_all_checks()
-
     if errors:
         print("=== Wiring Errors Detected ===")
         for e in errors:
             print("·", e)
     else:
         print("No wiring errors detected.")
+
+
+    for comp in component_pins:
+        print(f"{comp['class']} @ {comp['box']} → pins={comp['pins']}, value={comp['value']}Ω")
+
+    
 
 if __name__ == '__main__':
     main()

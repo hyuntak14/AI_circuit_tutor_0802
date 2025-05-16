@@ -50,7 +50,13 @@ def generate_circuit(
     comps = [c for c in all_comps if c['class'] != 'Line_area']
     mapped = []
     for idx, comp in enumerate(comps, start=1):
-        pin_a, pin_b = comp['pins']
+        # ① 핀 정보가 정확히 2개인지 체크
+        pins = comp.get('pins', [])
+        if len(pins) != 2:
+            # 잘못된 핀 개수는 건너뛰거나, 로그를 남기고 다음 컴포넌트로
+            print(f"[경고] 컴포넌트 #{idx}({comp['class']}) 핀 개수 오류: {pins}")
+            continue
+        pin_a, pin_b = pins
 
         def nearest_net(pt):
             x, y = pt

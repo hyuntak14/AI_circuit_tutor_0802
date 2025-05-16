@@ -80,11 +80,11 @@ def get_n_clicks(img, window_name, prompts):
             cv2.imshow(window_name, clone)
             if len(pts) >= len(prompts):
                 cv2.waitKey(500)
-                cv2.destroyWindow(window_name)
+                #cv2.destroyWindow(window_name)
 
-    cv2.namedWindow(window_name)
+    #cv2.namedWindow(window_name)
     cv2.setMouseCallback(window_name, click_event)
-    cv2.imshow(window_name, clone)
+    #cv2.imshow(window_name, clone)
     for msg in prompts:
         print(msg)
     cv2.waitKey(0)
