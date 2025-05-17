@@ -346,7 +346,7 @@ def main():
     root.withdraw()
 
     # Detector 초기화
-    detector     = FasterRCNNDetector(r'D:/Hyuntak/연구실/AR 회로 튜터/breadboard_project/model/fasterrcnn.pt')
+    detector     = FasterRCNNDetector(r'D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/model/fasterrcnn.pt')
     hole_det = HoleDetector(
     template_csv_path='detector/template_holes_complete.csv',
     template_image_path='detector/breadboard18.jpg',
@@ -360,7 +360,7 @@ def main():
     ic_det       = ICChipPinDetector()       # IC 칩 핀 위치 detector
 
     # 이미지 로드 및 브레드보드 검출
-    img = imread_unicode(r'D:\Hyuntak\연구실\AR 회로 튜터\breadboard_project\breadboard99.jpg')
+    img = imread_unicode(r'D:\Hyuntak\lab\AR_circuit_tutor\breadboard_project\breadboard99.jpg')
     comps = detector.detect(img)
     bb = next((b for c,_,b in comps if c.lower()=='breadboard'), None)
     if bb is None:
@@ -388,7 +388,7 @@ def main():
     # 1) 구멍 좌표 검출
     holes = hole_det.detect_holes(warped_raw)
     # 2) 전체 넷 클러스터링
-    nets, row_nets  = hole_det.get_board_nets(holes,base_img=warped_raw, show=False)
+    nets, row_nets  = hole_det.get_board_nets(holes,base_img=warped_raw, show=True)
 
     # 2-1) 행별 그룹(cluster) 생성 (template alignment 적용된 points 기준)
     #hole_det.visualize_clusters(base_img=warped_raw,clusters=nets,affine_pts=holes )
