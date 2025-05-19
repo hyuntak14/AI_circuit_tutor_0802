@@ -78,6 +78,21 @@ def generate_circuit(
     for comp in mapped:
         print(f"{comp['name']} ({comp['class']}): Net1={comp['nodes'][0]}, Net2={comp['nodes'][1]}")
 
+     # 🔧 4) 전원 소스 추가 (이 부분이 누락되어 있었음!)
+    print("=== Adding Power Sources ===")
+    for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs, start=1):
+        vs_name = f"V{i}"
+        vs_comp = {
+            'name': vs_name,
+            'class': 'VoltageSource',
+            'value': voltage,
+            'nodes': (net_p, net_m)
+        }
+        mapped.append(vs_comp)
+        print(f"{vs_name} (VoltageSource): Net1={net_p}, Net2={net_m}, Value={voltage}V")
+
+
+
     # 4) DataFrame 구성
     df = pd.DataFrame([{
         'name': m['name'],
@@ -93,7 +108,109 @@ def generate_circuit(
     write_graphml(G, output_img.replace('.jpg', '.graphml'))
 
     # 6) 비교
+    # 상세 점수 출력
+    # 6) 비교 - 개선된 버전
     try:
+        import glob
+        graphml_dir = "checker"
+        files = glob.glob(os.path.join(graphml_dir, "*.graphml"))
+        if files:
+            print(f"\n[회로 비교] {len(files)}개의 기준 회로와 비교 중...")
+            
+            sims = []
+            best_match_details = None
+            best_match_score = -1
+            
+            for f in files:
+                try:
+                    G2 = nx.read_graphml(f)
+                    
+                    # 디버그 모드로 상세 비교 수행
+                    comparer = CircuitComparer(G, G2, debug=False)  # 전체적으로는 debug=False
+                    similarity = comparer.compute_similarity()
+                    details = comparer.detailed_comparison()
+                    
+                    sims.append((os.path.basename(f), similarity, details))
+                    
+                    # 가장 높은 점수의 회로에 대해서는 상세 정보 저장
+                    if similarity > best_match_score:
+                        best_match_score = similarity
+                        best_match_details = (os.path.basename(f), comparer, details)
+                    
+                except Exception as e:
+                    print(f"[비교 실패] {f}: {e}")
+            
+            # 유사도 순으로 정렬
+            sims.sort(key=lambda x: -x[1])
+            
+            print("\n=== 유사도 TOP 3 회로 ===")
+            for i, (filename, score, details) in enumerate(sims[:3]):
+                print(f"{i+1}. {filename}")
+                print(f"   💯 전체 유사도: {score:.3f}")
+                print(f"   🔧 컴포넌트 매칭: {details['node_score']:.3f}")
+                print(f"   🔗 연결 매칭: {details['edge_score']:.3f}")
+                print(f"   📊 노드 수: {details['graph1_nodes']} vs {details['graph2_nodes']}")
+                print(f"   📊 엣지 수: {details['graph1_edges']} vs {details['graph2_edges']}")
+                print()
+            
+            # 가장 유사한 회로에 대한 상세 분석
+            if best_match_details and best_match_score > 0.7:
+                filename, comparer, details = best_match_details
+                print(f"\n=== 최고 유사도 회로 상세 분석: {filename} ===")
+                print(f"🎯 유사도: {best_match_score:.3f}")
+                
+                # 디버그 모드로 다시 비교하여 상세 정보 출력
+                comparer_debug = CircuitComparer(G, comparer.G2, debug=True)
+                comparer_debug.compute_similarity()
+                
+                # 🎨 그래프 시각화 추가
+                try:
+                    vis_path = output_img.replace('.jpg', '_comparison.png')
+                    comparer_debug.visualize_comparison(save_path=vis_path, show=False)
+                    print(f"📊 회로 비교 시각화 저장됨: {vis_path}")
+                except Exception as viz_e:
+                    print(f"[시각화 오류] {viz_e}")
+                    
+            elif best_match_score > 0:
+                filename, comparer, details = best_match_details
+                print(f"\n💡 가장 유사한 회로: {filename} (유사도: {best_match_score:.3f})")
+                print("   - 유사도가 낮습니다. 새로운 형태의 회로일 가능성이 높습니다.")
+                
+                # 🎨 낮은 유사도라도 시각화 제공
+                try:
+                    vis_path = output_img.replace('.jpg', '_comparison.png')
+                    comparer_debug = CircuitComparer(G, comparer.G2, debug=False)
+                    comparer_debug.visualize_comparison(save_path=vis_path, show=False)
+                    print(f"📊 회로 비교 시각화 저장됨: {vis_path}")
+                except Exception as viz_e:
+                    print(f"[시각화 오류] {viz_e}")
+            
+            # 전체 통계
+            if sims:
+                avg_similarity = sum(sim[1] for sim in sims) / len(sims)
+                print(f"\n📈 전체 통계")
+                print(f"   평균 유사도: {avg_similarity:.3f}")
+                print(f"   최고 유사도: {max(sim[1] for sim in sims):.3f}")
+                print(f"   최저 유사도: {min(sim[1] for sim in sims):.3f}")
+                
+                # 유사한 회로 개수
+                similar_count = sum(1 for sim in sims if sim[1] > 0.8)
+                print(f"   매우 유사한 회로 (0.8+): {similar_count}개")
+                
+        else:
+            print("[비교] 비교 대상 .graphml 파일이 checker 폴더에 없습니다.")
+            print("       CircuitSaver로 기준 회로를 먼저 생성해주세요.")
+            
+    except ImportError:
+        print("[오류] networkx 또는 glob 모듈을 가져올 수 없습니다.")
+    except Exception as e:
+        print(f"[오류] 회로 비교 실패: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+    #기존 비교 (최종 점수만 출력)
+    '''try:
         import glob
         graphml_dir = "checker"
         files = glob.glob(os.path.join(graphml_dir, "*.graphml"))
@@ -114,7 +231,7 @@ def generate_circuit(
         else:
             print("[비교] 비교 대상 .graphml 없음")
     except Exception as e:
-        print(f"[오류] 회로 비교 실패: {e}")
+        print(f"[오류] 회로 비교 실패: {e}")'''
 
     # 7) SPICE 저장
     toSPICE(df, voltage, output_spice)

@@ -1,15 +1,39 @@
 <?xml version='1.0' encoding='utf-8'?>
-<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d2" for="node" attr.name="nets" attr.type="string"/>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d4" for="edge" attr.name="nets" attr.type="string"/>
+<key id="d3" for="node" attr.name="value" attr.type="long"/>
+<key id="d2" for="node" attr.name="nets" attr.type="string"/>
 <key id="d1" for="node" attr.name="value" attr.type="double"/>
 <key id="d0" for="node" attr.name="comp_class" attr.type="string"/>
 <graph edgedefault="undirected"><node id="R1">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">57,169</data>
+  <data key="d2">177,171</data>
 </node>
-<node id="R2">
+<node id="D2">
+  <data key="d0">Diode</data>
+  <data key="d3">10</data>
+  <data key="d2">63,177</data>
+</node>
+<node id="R3">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">170,102</data>
+  <data key="d2">171,102</data>
 </node>
+<node id="V1">
+  <data key="d0">VoltageSource</data>
+  <data key="d1">10.0</data>
+  <data key="d2">63,102</data>
+</node>
+<edge source="R1" target="D2">
+  <data key="d4">177</data>
+</edge>
+<edge source="R1" target="R3">
+  <data key="d4">171</data>
+</edge>
+<edge source="D2" target="V1">
+  <data key="d4">63</data>
+</edge>
+<edge source="R3" target="V1">
+  <data key="d4">102</data>
+</edge>
 </graph></graphml>
