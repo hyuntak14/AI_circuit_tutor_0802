@@ -13,6 +13,7 @@ from diagram import draw_connectivity_graph
 import glob
 from checker.Circuit_comparer import CircuitComparer
 import cv2
+
 def generate_circuit(
     all_comps: list,
     holes: list,

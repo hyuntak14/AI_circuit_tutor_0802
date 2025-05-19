@@ -360,7 +360,7 @@ def main():
     ic_det       = ICChipPinDetector()       # IC 칩 핀 위치 detector
 
     # 이미지 로드 및 브레드보드 검출
-    img = imread_unicode(r'D:\Hyuntak\lab\AR_circuit_tutor\breadboard_project\breadboard18.jpg')
+    img = imread_unicode(r'D:\Hyuntak\lab\AR_circuit_tutor\breadboard_project\breadboard_k1.jpg')
     comps = detector.detect(img)
     bb = next((b for c,_,b in comps if c.lower()=='breadboard'), None)
     if bb is None:

@@ -789,6 +789,8 @@ def draw_connectivity_graph_from_nx(G, output_path=None):
     return plt.gcf()
 
 
+
+
 if __name__=='__main__':
     import argparse, os
     parser = argparse.ArgumentParser()
