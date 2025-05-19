@@ -112,15 +112,22 @@ class ErrorChecker:
         return errors
 
     def detect_mult_voltage_sources(self):
-        """하나의 net에 둘 이상의 VoltageSource 연결 검출"""
+        """하나의 net에 둘 이상의 VoltageSource 연결 검출 (수정된 버전)"""
         errors = []
-        vs_by_net = defaultdict(list)
+        
+        # 각 net에 연결된 서로 다른 전압원들을 추적
+        vs_by_net = defaultdict(set)  # set을 사용하여 중복 제거
+        
         for comp in self.voltage_components:
-            for n in comp['nodes']:
-                vs_by_net[n].append(comp['name'])
-        for node, names in vs_by_net.items():
-            if len(names) > 1:
-                errors.append(f"Multiple voltage sources on net {node}: {names}")
+            vs_name = comp['name']
+            for net in comp['nodes']:
+                vs_by_net[net].add(vs_name)
+        
+        # 같은 net에 2개 이상의 서로 다른 전압원이 연결된 경우만 에러
+        for net, vs_names in vs_by_net.items():
+            if len(vs_names) > 1:
+                errors.append(f"Multiple voltage sources on net {net}: {list(vs_names)}")
+        
         return errors
 
     def detect_polarity_errors(self):

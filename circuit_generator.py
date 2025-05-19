@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from diagram import draw_connectivity_graph
 import glob
 from checker.Circuit_comparer import CircuitComparer
+import cv2
 def generate_circuit(
     all_comps: list,
     holes: list,
@@ -239,11 +240,50 @@ def generate_circuit(
     # 8) 전원별 회로도 및 연결 그래프 시각화
     for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs, 1):
         path = output_img.replace('.jpg', f'_pwr{i}.jpg')
-        draw_connectivity_graph(mapped, power_plus=(net_p, x_p), power_minus=(net_m, x_m),
-                                output_path=path.replace('.jpg', '_graph.png'))
-        d = drawDiagram(voltage, mapped, wires, power_plus=(net_p, x_p), power_minus=(net_m, x_m))
-        d.draw()
-        d.save(path)
+        
+        # ✅ 연결 그래프: 이미 생성된 Graph G를 직접 시각화
+        try:
+            from diagram import draw_connectivity_graph_from_nx
+            draw_connectivity_graph_from_nx(G, output_path=path.replace('.jpg', '_graph.png'))
+        except Exception as e:
+            print(f"Failed to generate connectivity graph: {e}")
+        
+        # ✅ 회로도: networkx Graph로부터 깔끔한 schemdraw 회로도 생성
+        try:
+            from diagram import drawDiagramFromGraph_fixed
+            d = drawDiagramFromGraph_fixed(G, voltage)
+            
+            if d:
+                # schemdraw 자체 저장 기능 사용
+                d.draw()
+                d.save(path)
+                print(f"Circuit diagram saved: {path}")
+                
+                # OpenCV 이미지로도 저장 (선택적)
+                try:
+                    from diagram import render_drawing_to_cv2
+                    img_cv = render_drawing_to_cv2(d)
+                    cv2.imwrite(path.replace('.jpg', '_cv.jpg'), img_cv)
+                    print(f"OpenCV version saved: {path.replace('.jpg', '_cv.jpg')}")
+                except Exception as cv_error:
+                    print(f"Warning: Failed to save OpenCV version: {cv_error}")
+            else:
+                print(f"Failed to generate circuit diagram for power pair {i}")
+                # 기존 방식으로 fallback
+                d_fallback = drawDiagram(voltage, mapped, wires, power_plus=(net_p, x_p), power_minus=(net_m, x_m))
+                d_fallback.draw()
+                d_fallback.save(path)
+                
+        except Exception as diagram_error:
+            print(f"Error generating diagram: {diagram_error}")
+            # 최종 fallback - 기존 방식 사용
+            try:
+                d_fallback = drawDiagram(voltage, mapped, wires, power_plus=(net_p, x_p), power_minus=(net_m, x_m))
+                d_fallback.draw()
+                d_fallback.save(path)
+                print(f"Fallback diagram saved: {path}")
+            except Exception as fallback_error:
+                print(f"All diagram generation methods failed: {fallback_error}")
 
     # 9) 전류·전압 해석
     circuit_levels = []
