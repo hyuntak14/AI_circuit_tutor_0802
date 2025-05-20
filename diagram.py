@@ -1,12 +1,15 @@
 # diagram.py 파일 상단에 추가할 코드
 
 import matplotlib
+import matplotlib
+matplotlib.use('TkAgg')  # 또는 'Qt5Agg', 'WxAgg' 등 다른 대화형 백엔드
+# 이후 schemdraw 코드 실행
 # Streamlit 환경에서 GUI 오류를 방지하기 위해 Agg 백엔드 사용
 import os
-if 'STREAMLIT_SERVER_PORT' in os.environ:
-    matplotlib.use('Agg')
-else:
-    matplotlib.use('Qt5Agg')
+#if 'STREAMLIT_SERVER_PORT' in os.environ:
+#    matplotlib.use('Agg')
+#else:
+#    matplotlib.use('Qt5Agg')
 
 import matplotlib.pyplot as plt
 import cv2

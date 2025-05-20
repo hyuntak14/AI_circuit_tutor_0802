@@ -353,14 +353,14 @@ def main():
     max_nn_dist=20.0
 )
 
-    wire_det     = WireDetector(kernel_size=4)
+    wire_det     = WireDetector(kernel_size=3)
     resistor_det = ResistorEndpointDetector()
     led_det      = LedEndpointDetector(max_hole_dist=15, visualize=False)
     diode_det    = DiodeEndpointDetector()  # diode endpoints detector
     ic_det       = ICChipPinDetector()       # IC 칩 핀 위치 detector
 
     # 이미지 로드 및 브레드보드 검출
-    img = imread_unicode(r'D:\Hyuntak\lab\AR_circuit_tutor\breadboard_project\breadboard_9_1.jpg')
+    img = imread_unicode(r'D:\Hyuntak\lab\AR_circuit_tutor\breadboard_project\breadboard_demo5.jpg')
     comps = detector.detect(img)
     bb = next((b for c,_,b in comps if c.lower()=='breadboard'), None)
     if bb is None:

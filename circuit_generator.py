@@ -12,6 +12,9 @@ import matplotlib.pyplot as plt
 from diagram import draw_connectivity_graph
 import glob
 from checker.Circuit_comparer import CircuitComparer
+import matplotlib
+matplotlib.use('TkAgg')  # 또는 'Qt5Agg', 'WxAgg' 등 다른 대화형 백엔드
+# 이후 schemdraw 코드 실행
 import cv2
 
 def generate_circuit(
@@ -293,7 +296,7 @@ def generate_circuit(
                 try:
                     # 다이어그램 그리기 및 저장 (GUI 오류 방지)
                     import matplotlib
-                    matplotlib.use('Agg')  # GUI 백엔드 사용 안함
+                    matplotlib.use('TkAgg')  # GUI 백엔드 사용 안함
                     d.draw()
                     d.save(path)
                     

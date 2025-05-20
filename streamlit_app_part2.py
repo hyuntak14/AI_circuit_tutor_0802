@@ -120,8 +120,13 @@ def page_4_component_edit():
     
     # 수정 가능한 컴포넌트 목록 (세션에서 관리)
     if 'editable_comps' not in st.session_state:
-        st.session_state.editable_comps = st.session_state.detected_comps.copy()
-    
+        if 'final_comps' in st.session_state:
+            # 이전에 저장된 final_comps가 있으면 editable_comps에 복원
+            st.session_state.editable_comps = st.session_state.final_comps.copy()
+        else:
+            # 없으면 detected_comps에서 초기화
+            st.session_state.editable_comps = st.session_state.detected_comps.copy()
+        
     # 편집 모드 상태 초기화
     if 'edit_mode_enabled' not in st.session_state:
         st.session_state.edit_mode_enabled = False
@@ -136,15 +141,29 @@ def page_4_component_edit():
     CLASS_OPTIONS = ['Resistor', 'LED', 'Diode', 'IC', 'Line_area', 'Capacitor']
     
     # 편집 모드 및 추가 모드 토글
+    # 편집 모드 및 추가 모드 토글
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         st.write(f"**Detected {len(editable_comps)} components**")
     with col2:
-        edit_mode = st.toggle("Edit Mode", key="edit_mode_toggle", value=st.session_state.edit_mode_enabled)
+        prev_edit_mode = st.session_state.edit_mode_enabled
+        edit_mode = st.toggle("Edit Mode", key="edit_mode_toggle", value=prev_edit_mode)
+        
         # Edit Mode 종료 시 변경사항 확실히 저장
-        if st.session_state.edit_mode_enabled and not edit_mode:
+        if prev_edit_mode and not edit_mode:
             # Edit Mode에서 나올 때 최종 저장
-            st.session_state.final_comps = st.session_state.editable_comps.copy()
+            if 'updated_components' in st.session_state and st.session_state.updated_components:
+                # 변경된 컴포넌트가 있는 경우에만 저장 및 메시지 표시
+                st.session_state.final_comps = st.session_state.editable_comps.copy()
+                st.success(f"Saved changes for {len(st.session_state.updated_components)} components!")
+                st.session_state.updated_components = set()  # 저장 후 변경 기록 초기화
+            else:
+                # 모든 경우에 저장 (변경 감지가 잘 안될 수 있으므로)
+                st.session_state.final_comps = st.session_state.editable_comps.copy()
+                st.info("Changes saved.")
+            # 강제 페이지 갱신
+            st.rerun()
+        
         st.session_state.edit_mode_enabled = edit_mode
     with col3:
         add_mode = st.toggle("Add Mode", key="add_mode_toggle", value=st.session_state.add_component_mode)
@@ -158,6 +177,9 @@ def page_4_component_edit():
     
     # 편집 모드에 따른 처리
     if edit_mode:
+        # 강제 저장 버튼 추가 - 이 부분은 canvas_result가 정의된 후에 나와야 함
+        # 따라서 아래 코드로 이동해야 함
+        
         # 편집 모드 - transform으로 위치 수정
         st.write("**🛠️ Edit Mode: Drag to move/resize, shift+click to select**")
         
@@ -195,9 +217,40 @@ def page_4_component_edit():
             update_streamlit=True
         )
         
+        # 강제 저장 버튼 (canvas_result가 정의된 후에 배치)
+        if st.button("💾 Force Save Changes", key="force_save_changes"):
+            # 현재 canvas_result에서 최신 상태를 가져와 강제 업데이트
+            if canvas_result.json_data and canvas_result.json_data.get("objects"):
+                objects = canvas_result.json_data["objects"]
+                
+                for obj in objects:
+                    obj_id = obj.get("id", "")
+                    if obj_id.startswith("comp_"):
+                        try:
+                            comp_idx = int(obj_id.split("_")[1])
+                            if 0 <= comp_idx < len(editable_comps):
+                                new_x1 = int(round(obj["left"]))
+                                new_y1 = int(round(obj["top"]))
+                                new_x2 = int(round(obj["left"] + obj["width"]))
+                                new_y2 = int(round(obj["top"] + obj["height"]))
+                                editable_comps[comp_idx]['bbox'] = (new_x1, new_y1, new_x2, new_y2)
+                        except (ValueError, IndexError):
+                            pass
+                
+                # 세션 상태 업데이트 및 final_comps에도 저장
+                st.session_state.editable_comps = editable_comps.copy()
+                st.session_state.final_comps = editable_comps.copy()
+                st.success("Changes forcefully saved!")
+                # 디버그용 로그
+                st.write("Force saved: ", [(i, comp['bbox']) for i, comp in enumerate(editable_comps)])
+                st.rerun()
+        
         # 캔버스 변경사항 처리 - 실시간으로 editable_comps 업데이트
         if canvas_result.json_data and canvas_result.json_data.get("objects"):
             objects = canvas_result.json_data["objects"]
+            
+            # 캔버스 객체 ID와 editable_comps 인덱스 매핑 저장
+            updated_indices = set()
             
             # 현재 캔버스 상태를 editable_comps에 반영
             for obj in objects:
@@ -213,13 +266,23 @@ def page_4_component_edit():
                             new_y2 = int(round(obj["top"] + obj["height"]))
                             new_bbox = (new_x1, new_y1, new_x2, new_y2)
                             
-                            # 즉시 업데이트
-                            editable_comps[comp_idx]['bbox'] = new_bbox
+                            # 변경사항이 있는 경우만 업데이트
+                            if editable_comps[comp_idx]['bbox'] != new_bbox:
+                                editable_comps[comp_idx]['bbox'] = new_bbox
+                                updated_indices.add(comp_idx)
                     except (ValueError, IndexError):
                         pass
             
-            # 세션 상태에 즉시 반영
-            st.session_state.editable_comps = editable_comps.copy()
+            # 변경된 내용이 있으면 세션 상태 업데이트 및 로깅
+            if updated_indices:
+                st.session_state.editable_comps = editable_comps.copy()
+                # 세션 상태에 명시적으로 수정 기록 남기기
+                if 'updated_components' not in st.session_state:
+                    st.session_state.updated_components = set()
+                st.session_state.updated_components.update(updated_indices)
+                
+                # 디버그용 로그
+                st.write(f"Updated components: {updated_indices}")
         
         # 실시간 상태 표시 (디버깅용)
         if st.checkbox("Show debug info", key="debug_canvas"):
