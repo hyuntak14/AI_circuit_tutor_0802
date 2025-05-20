@@ -30,7 +30,7 @@ MAX_DISPLAY_WIDTH = DISPLAY_SIZE
 MAX_DISPLAY_HEIGHT = DISPLAY_SIZE
 
 # 전체 단계 수
-TOTAL_PAGES = 12
+TOTAL_PAGES = 10
 
 # 세션 상태 초기화
 if 'page' not in st.session_state:
@@ -87,8 +87,17 @@ def show_navigation(page_num, prev_enabled=True, next_enabled=True):
         st.rerun()
 
 # 1) 업로드 & 원본 표시
-# streamlit_app_part2.py의 page_4_component_edit 함수 수정
-# streamlit_app_part2.py의 page_4_component_edit 함수 수정
+# Detector 인스턴스 초기화 (main.py처럼 한 번만 생성하여 재사용)
+@st.cache_resource
+def initialize_detectors():
+    """main.py와 동일한 방식으로 detector 인스턴스들을 생성"""
+    return {
+        'resistor': ResistorEndpointDetector(),
+        'led': LedEndpointDetector(max_hole_dist=15, visualize=False),
+        'diode': DiodeEndpointDetector(),
+        'ic': ICChipPinDetector(),
+        'wire': WireDetector(kernel_size=4)
+    }
 
 def page_4_component_edit():
     st.subheader("Step 4: Component Detection & Manual Edit")
@@ -99,7 +108,6 @@ def page_4_component_edit():
         return
     
     warped = st.session_state.warped
-    # warped는 이미 640x640이므로 추가 리사이즈 불필요
     disp_rgb = cv2.cvtColor(warped, cv2.COLOR_BGR2RGB)
     
     # 초기 컴포넌트 검출 (한 번만 실행)
@@ -118,29 +126,42 @@ def page_4_component_edit():
     if 'edit_mode_enabled' not in st.session_state:
         st.session_state.edit_mode_enabled = False
     
-    # 캔버스 상태 초기화 (중요!)
-    if 'canvas_objects' not in st.session_state:
-        st.session_state.canvas_objects = []
+    # 새 컴포넌트 추가 모드 초기화
+    if 'add_component_mode' not in st.session_state:
+        st.session_state.add_component_mode = False
     
     editable_comps = st.session_state.editable_comps
     
     # 컴포넌트 클래스 옵션
     CLASS_OPTIONS = ['Resistor', 'LED', 'Diode', 'IC', 'Line_area', 'Capacitor']
     
-    # 편집 모드 토글
-    col1, col2 = st.columns([3, 1])
+    # 편집 모드 및 추가 모드 토글
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         st.write(f"**Detected {len(editable_comps)} components**")
     with col2:
         edit_mode = st.toggle("Edit Mode", key="edit_mode_toggle", value=st.session_state.edit_mode_enabled)
+        # Edit Mode 종료 시 변경사항 확실히 저장
+        if st.session_state.edit_mode_enabled and not edit_mode:
+            # Edit Mode에서 나올 때 최종 저장
+            st.session_state.final_comps = st.session_state.editable_comps.copy()
         st.session_state.edit_mode_enabled = edit_mode
+    with col3:
+        add_mode = st.toggle("Add Mode", key="add_mode_toggle", value=st.session_state.add_component_mode)
+        st.session_state.add_component_mode = add_mode
+    
+    # 모드 상호 배타적 처리
+    if edit_mode and add_mode:
+        st.session_state.add_component_mode = False
+        add_mode = False
+        st.warning("Edit Mode and Add Mode cannot be enabled simultaneously. Add Mode disabled.")
     
     # 편집 모드에 따른 처리
     if edit_mode:
         # 편집 모드 - transform으로 위치 수정
-        st.write("**🛠️ Edit Mode: Drag to move, Click to edit properties**")
+        st.write("**🛠️ Edit Mode: Drag to move/resize, shift+click to select**")
         
-        # editable_comps에서 핸들 생성
+        # 현재 editable_comps 상태를 기반으로 핸들 생성 (실시간 업데이트)
         handles = []
         for i, comp in enumerate(editable_comps):
             x1, y1, x2, y2 = comp['bbox']
@@ -152,75 +173,84 @@ def page_4_component_edit():
                 "width": x2 - x1,
                 "height": y2 - y1,
                 "stroke": col,
+                "strokeWidth": 2,
                 "fill": f"{col}33",
                 "cornerColor": col,
-                "cornerSize": 6,
-                "id": f"comp_{i}"  # 고유 ID 추가
+                "cornerSize": 8,
+                "transparentCorners": False,
+                "id": f"comp_{i}",
+                "selectable": True,
+                "hasControls": True,
+                "hasBorders": True
             })
         
-        # 캔버스로 위치 편집 및 클릭 감지
+        # 캔버스로 위치 편집
         canvas_result = st_canvas(
             background_image=Image.fromarray(disp_rgb),
             width=DISPLAY_SIZE,
             height=DISPLAY_SIZE,
             drawing_mode="transform",
-            initial_drawing={"objects": handles},
-            key="comp_edit_canvas"
+            initial_drawing={"objects": handles},  # 항상 최신 상태 반영
+            key="comp_edit_canvas",
+            update_streamlit=True
         )
         
-        # 클릭된 컴포넌트 감지
-        clicked_component = None
-        if canvas_result.json_data:
-            # 마우스 이벤트 또는 선택된 객체 확인
-            objects = canvas_result.json_data.get("objects", [])
-            if objects:
-                # 가장 최근에 수정된 객체를 클릭된 것으로 간주
-                # 또는 선택 상태가 변경된 객체 찾기
-                for i, obj in enumerate(objects):
-                    if i < len(editable_comps) and obj.get("id") == f"comp_{i}":
-                        # 위치가 변경된 경우 업데이트
-                        l, t = obj['left'], obj['top']
-                        w_box, h_box = obj['width'], obj['height']
-                        new_bbox = (int(l), int(t), int(l + w_box), int(t + h_box))
-                        if new_bbox != editable_comps[i]['bbox']:
-                            editable_comps[i]['bbox'] = new_bbox
-        
-        # 컴포넌트 클릭 감지 (별도 캔버스 사용)
-        st.write("**Click on a component to edit its properties:**")
-        
-        # 클릭 감지용 투명 캔버스
-        click_canvas = st_canvas(
-            background_image=Image.fromarray(disp_rgb),
-            width=DISPLAY_SIZE,
-            height=DISPLAY_SIZE,
-            drawing_mode="point",
-            stroke_width=1,
-            stroke_color="rgba(255,0,0,0.1)",
-            fill_color="rgba(255,0,0,0.1)",
-            key="click_detection_canvas"
-        )
-        
-        # 클릭된 위치로 컴포넌트 찾기
-        if click_canvas.json_data and click_canvas.json_data.get("objects"):
-            last_click = click_canvas.json_data["objects"][-1]
-            click_x = last_click["left"] + last_click["width"] / 2
-            click_y = last_click["top"] + last_click["height"] / 2
+        # 캔버스 변경사항 처리 - 실시간으로 editable_comps 업데이트
+        if canvas_result.json_data and canvas_result.json_data.get("objects"):
+            objects = canvas_result.json_data["objects"]
             
-            # 클릭한 위치가 어떤 컴포넌트에 속하는지 확인
+            # 현재 캔버스 상태를 editable_comps에 반영
+            for obj in objects:
+                obj_id = obj.get("id", "")
+                if obj_id.startswith("comp_"):
+                    try:
+                        comp_idx = int(obj_id.split("_")[1])
+                        if 0 <= comp_idx < len(editable_comps):
+                            # 캔버스의 현재 상태를 그대로 반영
+                            new_x1 = int(round(obj["left"]))
+                            new_y1 = int(round(obj["top"]))
+                            new_x2 = int(round(obj["left"] + obj["width"]))
+                            new_y2 = int(round(obj["top"] + obj["height"]))
+                            new_bbox = (new_x1, new_y1, new_x2, new_y2)
+                            
+                            # 즉시 업데이트
+                            editable_comps[comp_idx]['bbox'] = new_bbox
+                    except (ValueError, IndexError):
+                        pass
+            
+            # 세션 상태에 즉시 반영
+            st.session_state.editable_comps = editable_comps.copy()
+        
+        # 실시간 상태 표시 (디버깅용)
+        if st.checkbox("Show debug info", key="debug_canvas"):
+            st.write("Current editable_comps:")
             for i, comp in enumerate(editable_comps):
-                x1, y1, x2, y2 = comp['bbox']
-                if x1 <= click_x <= x2 and y1 <= click_y <= y2:
-                    clicked_component = i
+                st.write(f"  {i}: {comp['class']} - {comp['bbox']}")
+            
+            if canvas_result.json_data:
+                st.write("Canvas objects:")
+                for obj in canvas_result.json_data.get("objects", []):
+                    if obj.get("id", "").startswith("comp_"):
+                        st.write(f"  {obj['id']}: ({obj['left']}, {obj['top']}) - {obj['width']}x{obj['height']}")
+        
+        # 선택된 컴포넌트 편집 UI
+        selected_obj = None
+        if canvas_result.json_data and canvas_result.json_data.get("objects"):
+            # 가장 최근에 선택된 객체 찾기
+            for obj in reversed(canvas_result.json_data["objects"]):
+                if obj.get("id", "").startswith("comp_"):
+                    selected_obj = obj
                     break
         
-        # 클릭된 컴포넌트의 편집 UI 표시
-        if clicked_component is not None:
-            comp = editable_comps[clicked_component]
+        if selected_obj:
+            obj_id = selected_obj.get("id", "")
+            comp_idx = int(obj_id.split("_")[1])
+            comp = editable_comps[comp_idx]
             
-            # 팝업 스타일 UI
+            # 선택된 컴포넌트 편집 UI
             with st.container():
                 st.markdown("---")
-                st.markdown(f"### 🔧 Editing Component {clicked_component + 1}")
+                st.markdown(f"### 🔧 Editing Component {comp_idx + 1}")
                 
                 col1, col2, col3 = st.columns([2, 2, 1])
                 
@@ -233,42 +263,34 @@ def page_4_component_edit():
                         "Select Type",
                         CLASS_OPTIONS,
                         index=class_idx,
-                        key=f"popup_class_{clicked_component}"
+                        key=f"selected_class_{comp_idx}"
                     )
                     
-                    if st.button("💾 Update Class", key=f"update_class_{clicked_component}"):
+                    if st.button("💾 Update Class", key=f"update_selected_class_{comp_idx}"):
                         comp['class'] = new_class
                         st.session_state.editable_comps = editable_comps.copy()
                         st.success(f"Updated to {new_class}")
                         st.rerun()
                 
                 with col2:
-                    # 좌표 미세 조정
-                    st.write("**Position:**")
+                    # 좌표 표시 (실시간 업데이트)
+                    st.write("**Current Position:**")
                     x1, y1, x2, y2 = comp['bbox']
-                    
-                    new_x1 = st.number_input("X1", value=x1, step=1, key=f"popup_x1_{clicked_component}")
-                    new_y1 = st.number_input("Y1", value=y1, step=1, key=f"popup_y1_{clicked_component}")
-                    new_x2 = st.number_input("X2", value=x2, step=1, key=f"popup_x2_{clicked_component}")
-                    new_y2 = st.number_input("Y2", value=y2, step=1, key=f"popup_y2_{clicked_component}")
-                    
-                    if st.button("📐 Update Position", key=f"update_pos_{clicked_component}"):
-                        comp['bbox'] = (int(new_x1), int(new_y1), int(new_x2), int(new_y2))
-                        st.session_state.editable_comps = editable_comps.copy()
-                        st.success("Position updated")
-                        st.rerun()
+                    st.write(f"X1: {x1}, Y1: {y1}")
+                    st.write(f"X2: {x2}, Y2: {y2}")
+                    st.write(f"Width: {x2-x1}, Height: {y2-y1}")
                 
                 with col3:
-                    # 삭제 및 기타 작업
+                    # 삭제 및 복제
                     st.write("**Actions:**")
                     
-                    if st.button("🗑️ Delete", key=f"popup_delete_{clicked_component}", type="secondary"):
-                        editable_comps.pop(clicked_component)
+                    if st.button("🗑️ Delete", key=f"delete_selected_{comp_idx}", type="secondary"):
+                        editable_comps.pop(comp_idx)
                         st.session_state.editable_comps = editable_comps.copy()
                         st.success("Component deleted")
                         st.rerun()
                     
-                    if st.button("📋 Duplicate", key=f"popup_duplicate_{clicked_component}"):
+                    if st.button("📋 Duplicate", key=f"duplicate_selected_{comp_idx}"):
                         # 컴포넌트 복제 (약간 오프셋)
                         x1, y1, x2, y2 = comp['bbox']
                         new_comp = {
@@ -279,25 +301,87 @@ def page_4_component_edit():
                         st.session_state.editable_comps = editable_comps.copy()
                         st.success("Component duplicated")
                         st.rerun()
-                    
-                    if st.button("❌ Close", key=f"popup_close_{clicked_component}"):
-                        st.rerun()
-                
-                # 현재 선택된 컴포넌트 하이라이트 표시
-                st.markdown(f"""
-                <div style='padding: 10px; background-color: {COLOR_MAP.get(comp['class'], '#6c757d')}20; 
-                           border-left: 4px solid {COLOR_MAP.get(comp['class'], '#6c757d')}; border-radius: 5px;'>
-                    <strong>Selected:</strong> {comp['class']} at ({comp['bbox'][0]}, {comp['bbox'][1]}) - ({comp['bbox'][2]}, {comp['bbox'][3]})
-                </div>
-                """, unsafe_allow_html=True)
                 
                 st.markdown("---")
         
-        # 세션 상태 업데이트 (위치 변경 반영)
-        if st.session_state.editable_comps != editable_comps:
-            st.session_state.editable_comps = editable_comps.copy()
+        st.info("💡 Drag boxes to move/resize. Shift+click to select a component for editing.")
+    
+    elif add_mode:
+        # 새 컴포넌트 추가 모드
+        st.write("**➕ Add Mode: Draw rectangles to add new components**")
         
-        st.info("💡 Drag boxes to move, click on components to edit properties. Turn off Edit Mode when done.")
+        # 기존 컴포넌트가 표시된 이미지에 새 컴포넌트 그리기
+        canvas_add = st_canvas(
+            background_image=Image.fromarray(disp_rgb),
+            width=DISPLAY_SIZE,
+            height=DISPLAY_SIZE,
+            drawing_mode="rect",
+            stroke_width=2,
+            stroke_color="#ff0000",
+            fill_color="rgba(255,0,0,0.1)",
+            key="add_component_canvas",
+            update_streamlit=True
+        )
+        
+        # 기존 컴포넌트를 반투명하게 오버레이 표시
+        overlay_objects = []
+        for i, comp in enumerate(editable_comps):
+            x1, y1, x2, y2 = comp['bbox']
+            col = COLOR_MAP.get(comp['class'], '#6c757d')
+            overlay_objects.append({
+                "type": "rect",
+                "left": x1,
+                "top": y1,
+                "width": x2 - x1,
+                "height": y2 - y1,
+                "stroke": col,
+                "strokeWidth": 1,
+                "fill": f"{col}20",
+                "selectable": False,
+                "evented": False
+            })
+        
+        # 새로 그린 사각형들 처리
+        if canvas_add.json_data and canvas_add.json_data.get("objects"):
+            new_objects = [obj for obj in canvas_add.json_data["objects"] 
+                          if obj.get("type") == "rect" and obj.get("stroke") == "#ff0000"]
+            
+            if new_objects:
+                # 가장 최근에 그린 사각형
+                latest_rect = new_objects[-1]
+                x1 = int(latest_rect["left"])
+                y1 = int(latest_rect["top"])
+                x2 = int(latest_rect["left"] + latest_rect["width"])
+                y2 = int(latest_rect["top"] + latest_rect["height"])
+                
+                # 최소 크기 확인
+                if abs(x2-x1) > 20 and abs(y2-y1) > 20:
+                    st.write("**Add new component:**")
+                    col1, col2, col3 = st.columns([2, 1, 1])
+                    
+                    with col1:
+                        new_class = st.selectbox(
+                            "Component Type:",
+                            CLASS_OPTIONS,
+                            key="new_component_class"
+                        )
+                    
+                    with col2:
+                        if st.button("✅ Add", key="confirm_add_component"):
+                            new_comp = {'class': new_class, 'bbox': (x1, y1, x2, y2)}
+                            editable_comps.append(new_comp)
+                            st.session_state.editable_comps = editable_comps.copy()
+                            st.success(f"Added {new_class} component")
+                            st.rerun()
+                    
+                    with col3:
+                        if st.button("❌ Cancel", key="cancel_add_component"):
+                            st.rerun()
+                    
+                    st.write(f"Position: ({x1}, {y1}) to ({x2}, {y2})")
+                    st.write(f"Size: {x2-x1} × {y2-y1}")
+        
+        st.info("💡 Draw rectangles on the image to add new components. Turn off Add Mode when done.")
     
     else:
         # 보기 모드 - 현재 상태만 표시
@@ -317,7 +401,7 @@ def page_4_component_edit():
                 caption=f"Current Layout ({len(editable_comps)} components)", 
                 use_container_width=False, width=DISPLAY_SIZE)
         
-        st.info("💡 Enable Edit Mode to modify component positions.")
+        st.info("💡 Enable Edit Mode to modify components or Add Mode to add new ones.")
     
     # 컴포넌트 리스트 및 개별 편집
     st.subheader("Component List & Properties")
@@ -346,7 +430,6 @@ def page_4_component_edit():
                 )
                 if new_class != comp['class']:
                     comp['class'] = new_class
-                    # 클래스 변경 시 즉시 세션 상태 업데이트
                     st.session_state.editable_comps = editable_comps.copy()
                     st.rerun()
             
@@ -365,7 +448,6 @@ def page_4_component_edit():
                 new_bbox = (int(new_x1), int(new_y1), int(new_x2), int(new_y2))
                 if new_bbox != comp['bbox']:
                     comp['bbox'] = new_bbox
-                    # 좌표 변경 시 즉시 세션 상태 업데이트
                     st.session_state.editable_comps = editable_comps.copy()
             
             with col3:
@@ -373,7 +455,7 @@ def page_4_component_edit():
                 if st.button(f"🗑️ Delete", key=f"delete_{i}"):
                     components_to_delete.append(i)
     
-    # 삭제 처리 (역순으로 삭제하여 인덱스 문제 방지)
+    # 삭제 처리
     if components_to_delete:
         for idx in sorted(components_to_delete, reverse=True):
             editable_comps.pop(idx)
@@ -383,12 +465,13 @@ def page_4_component_edit():
     
     # 전체 작업 버튼들
     st.subheader("Batch Operations")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         if st.button("🔄 Reset to Auto-detected", key="reset_comps"):
             st.session_state.editable_comps = st.session_state.detected_comps.copy()
             st.session_state.edit_mode_enabled = False
+            st.session_state.add_component_mode = False
             st.success("Reset to original detection results")
             st.rerun()
     
@@ -396,6 +479,7 @@ def page_4_component_edit():
         if st.button("🧹 Clear All", key="clear_all"):
             st.session_state.editable_comps = []
             st.session_state.edit_mode_enabled = False
+            st.session_state.add_component_mode = False
             st.success("Cleared all components")
             st.rerun()
     
@@ -406,108 +490,53 @@ def page_4_component_edit():
                 detector = FasterRCNNDetector(model_path=MODEL_PATH)
                 raw = detector.detect(warped)
                 new_comps = [{'class':c,'bbox':b} for c,_,b in raw if c.lower()!='breadboard']
-                st.session_state.detected_comps = new_comps
+                st.session_state.detected_comps = new_comps.copy()
                 st.session_state.editable_comps = new_comps.copy()
                 st.session_state.edit_mode_enabled = False
+                st.session_state.add_component_mode = False
                 st.success(f"Re-detected {len(new_comps)} components")
                 st.rerun()
     
-    with col4:
-        # 새 컴포넌트 추가 모드
-        if st.button("➕ Add Component", key="add_mode"):
-            # 새 컴포넌트 추가를 위한 임시 모드
-            st.session_state.add_component_mode = True
-            st.rerun()
+    # 최종 결과 저장 - 항상 현재 상태를 저장
+    st.session_state.final_comps = st.session_state.editable_comps.copy()
     
-    # 새 컴포넌트 추가 모드
-    if st.session_state.get('add_component_mode', False):
-        st.subheader("➕ Add New Component")
-        st.write("**Draw a rectangle to add a new component:**")
-        
-        # 기존 컴포넌트가 표시된 이미지
-        vis_img = warped.copy()
-        for comp in editable_comps:
-            x1, y1, x2, y2 = comp['bbox']
-            col = COLOR_MAP.get(comp['class'], '#6c757d')
-            bgr_color = tuple(int(col.lstrip('#')[i:i+2], 16) for i in (4, 2, 0))
-            cv2.rectangle(vis_img, (x1, y1), (x2, y2), bgr_color, 2)
-        
-        # 새 컴포넌트 그리기 캔버스
-        canvas_add = st_canvas(
-            background_image=Image.fromarray(cv2.cvtColor(vis_img, cv2.COLOR_BGR2RGB)),
-            width=DISPLAY_SIZE,
-            height=DISPLAY_SIZE,
-            drawing_mode="rect",
-            stroke_width=2,
-            stroke_color="#ff0000",
-            fill_color="rgba(255,0,0,0.1)",
-            key="add_component_canvas"
-        )
-        
-        # 새로 그린 박스 처리
-        if canvas_add.json_data and canvas_add.json_data.get("objects"):
-            for obj in canvas_add.json_data["objects"]:
-                x1 = int(obj["left"])
-                y1 = int(obj["top"])
-                x2 = int(obj["left"] + obj["width"])
-                y2 = int(obj["top"] + obj["height"])
-                
-                # 유효한 크기 확인
-                if abs(x2-x1) > 20 and abs(y2-y1) > 20:
-                    # 중복 확인
-                    is_duplicate = any(
-                        abs(comp['bbox'][0] - x1) < 20 and abs(comp['bbox'][1] - y1) < 20
-                        for comp in editable_comps
-                    )
-                    
-                    if not is_duplicate:
-                        # 새 컴포넌트 클래스 선택
-                        new_class = st.selectbox(
-                            "Select class for new component:",
-                            CLASS_OPTIONS,
-                            key="new_comp_class"
-                        )
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("✅ Add Component", key="confirm_add"):
-                                new_comp = {'class': new_class, 'bbox': (x1, y1, x2, y2)}
-                                editable_comps.append(new_comp)
-                                st.session_state.editable_comps = editable_comps.copy()
-                                st.session_state.add_component_mode = False
-                                st.success(f"Added new {new_class} component")
-                                st.rerun()
-                        
-                        with col2:
-                            if st.button("❌ Cancel", key="cancel_add"):
-                                st.session_state.add_component_mode = False
-                                st.rerun()
-        
-        # 추가 모드 종료 버튼
-        if st.button("🔙 Exit Add Mode", key="exit_add"):
-            st.session_state.add_component_mode = False
-            st.rerun()
-    
-    # 최종 결과 저장
-    st.session_state.final_comps = editable_comps
-    
-    # 요약 정보
-    st.markdown("---")
-    st.success(f"✅ {len(editable_comps)} components ready for pin detection.")
-    
-    # 컴포넌트별 개수 표시
-    if editable_comps:
-        comp_counts = {}
-        for comp in editable_comps:
-            comp_type = comp['class']
-            comp_counts[comp_type] = comp_counts.get(comp_type, 0) + 1
-        
-        st.write("**Component Summary:**")
-        summary_text = ", ".join([f"{cls}: {count}" for cls, count in comp_counts.items()])
-        st.write(summary_text)
-    
-    show_navigation(4, next_enabled=len(editable_comps) > 0)
+    # 구멍 및 넷 검출 (한 번만 실행)
+    if 'holes' not in st.session_state or 'nets' not in st.session_state:
+        with st.spinner("🔍 Detecting holes and clustering nets…"):
+            hd = HoleDetector(
+                template_csv_path=os.path.join(BASE_DIR, "detector", "template_holes_complete.csv"),
+                template_image_path=os.path.join(BASE_DIR, "detector", "breadboard18.jpg"),
+                max_nn_dist=20.0
+            )
+            holes = hd.detect_holes(st.session_state.warped_raw)
+            nets, row_nets = hd.get_board_nets(holes, base_img=st.session_state.warped_raw, show=False)
 
+            hole_to_net = {}
+            for row_idx, clusters in row_nets:
+                for entry in clusters:
+                    for x, y in entry['pts']:
+                        hole_to_net[(int(round(x)), int(round(y)))] = entry['net_id']
+
+            rng = np.random.default_rng(1234)
+            net_ids = sorted(set(hole_to_net.values()))
+            net_colors = {nid: tuple(int(c) for c in rng.integers(0, 256, 3)) for nid in net_ids}
+
+        # 세션에 저장
+        st.session_state.holes       = holes
+        st.session_state.nets        = nets
+        st.session_state.row_nets    = row_nets
+        st.session_state.hole_to_net = hole_to_net
+        st.session_state.net_colors  = net_colors
+        st.session_state.warped_raw  = st.session_state.warped
+
+        st.success(f"✅ Detected {len(holes)} holes and {len(nets)} nets")
+
+    else:
+        holes = st.session_state.holes
+        nets  = st.session_state.nets
+        st.success(f"✅ Already detected {len(holes)} holes and {len(nets)} net clusters")
+
+    show_navigation(4, next_enabled=len(editable_comps) > 0)
 
 # 5) 구멍 검출 및 넷 클러스터링
 def page_5_hole_detection():
@@ -574,15 +603,19 @@ def page_5_hole_detection():
 # streamlit_app_part2.py의 간소화된 page_6_pin_detection 함수
 
 def page_6_pin_detection():
-    st.subheader("Step 6: Component Pin Detection")
+    st.subheader("Step 5: Component Pin Detection")
     
     required_attrs = ['warped_raw', 'final_comps', 'holes', 'hole_to_net', 'net_colors']
     if not all(hasattr(st.session_state, attr) for attr in required_attrs):
         st.error("❌ Required data not available. Please complete previous steps.")
-        show_navigation(6, next_enabled=False)
+        show_navigation(5, next_enabled=False)
         return
     
     warped = st.session_state.warped_raw
+    warped_raw = st.session_state.warped_raw   # pristine copy
+    dets       = initialize_detectors()
+    resistor_det, led_det, diode_det = dets['resistor'], dets['led'], dets['diode']
+    ic_det, wire_det              = dets['ic'], dets['wire']
     
     # 세션 상태에 pin_results가 없으면 자동 검출 실행
     if 'pin_results' not in st.session_state:
@@ -866,7 +899,7 @@ def page_6_pin_detection():
         ]
         st.warning(f"⚠️ Incomplete: {', '.join(incomplete)}")
     
-    show_navigation(6, next_enabled=True)
+    show_navigation(5, next_enabled=True)
 
 
 # 7) 값 입력

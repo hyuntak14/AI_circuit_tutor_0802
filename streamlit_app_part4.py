@@ -30,7 +30,7 @@ MAX_DISPLAY_WIDTH = DISPLAY_SIZE
 MAX_DISPLAY_HEIGHT = DISPLAY_SIZE
 
 # 전체 단계 수
-TOTAL_PAGES = 12
+TOTAL_PAGES = 10
 
 # 세션 상태 초기화
 if 'page' not in st.session_state:
@@ -95,23 +95,23 @@ def page_10_circuit_generation():
     
     if missing:
         st.error(f"❌ Missing required data: {missing}")
-        show_navigation(10, next_enabled=False)
+        show_navigation(9, next_enabled=False)
         return
     
     # 입력 데이터 검증
     if not st.session_state.fixed_pins:
         st.error("❌ No components detected. Please complete previous steps.")
-        show_navigation(10, next_enabled=False)
+        show_navigation(9, next_enabled=False)
         return
         
     if not st.session_state.hole_to_net:
         st.error("❌ No hole-to-net mapping available. Please complete hole detection.")
-        show_navigation(10, next_enabled=False)
+        show_navigation(9, next_enabled=False)
         return
         
     if not st.session_state.power_points or len(st.session_state.power_points) < 2:
         st.error("❌ Please select at least 2 power terminals.")
-        show_navigation(10, next_enabled=False)
+        show_navigation(9, next_enabled=False)
         return
     
     with st.spinner("⚡ Generating circuit diagram and SPICE file..."):
@@ -130,7 +130,7 @@ def page_10_circuit_generation():
             
             if not all_endpoints:
                 st.error("❌ No component endpoints found. Please check pin detection.")
-                show_navigation(10, next_enabled=False)
+                show_navigation(9, next_enabled=False)
                 return
             
             power_pairs = []
@@ -176,9 +176,18 @@ def page_10_circuit_generation():
                         st.warning(f"⚠️ Wire connection error for {comp['class']}: {e}")
                         continue
             
-            # 회로 생성 (640x640 크기로)
-            mapped, hole_to_net = generate_circuit(
-                all_comps=st.session_state.fixed_pins,
+            # fixed_pins에 value 정보 추가
+            comps_with_values = []
+            for comp in st.session_state.fixed_pins:
+                comp_with_value = comp.copy()
+                # bbox를 키로 사용하여 comp_values에서 값 찾기
+                bbox_key = tuple(comp['bbox'])
+                comp_with_value['value'] = st.session_state.comp_values.get(bbox_key, 0.0)
+                comps_with_values.append(comp_with_value)
+            
+            # 회로 생성 - value가 포함된 컴포넌트 전달
+            mapped, hole_to_net_updated = generate_circuit(
+                all_comps=comps_with_values,
                 holes=st.session_state.holes,
                 wires=wires,
                 voltage=voltage,
@@ -198,19 +207,33 @@ def page_10_circuit_generation():
             st.error("- No components are detected")
             st.error("- Grid width calculation results in zero")
             st.error("- Invalid coordinate calculations")
-            show_navigation(10, next_enabled=False)
+            show_navigation(9, next_enabled=False)
             return
         except ValueError as e:
             st.error(f"❌ Value error: {str(e)}")
             st.error("Please check if all required data is properly initialized.")
-            show_navigation(10, next_enabled=False)
+            show_navigation(9, next_enabled=False)
+            return
+        except TypeError as e:
+            st.error(f"❌ Type error in generate_circuit call: {str(e)}")
+            st.info("This might be due to incorrect parameter names. Please check the generate_circuit function signature.")
+            
+            # generate_circuit 함수의 시그니처 출력을 위한 디버깅 정보
+            try:
+                import inspect
+                sig = inspect.signature(generate_circuit)
+                st.code(f"generate_circuit signature: {sig}")
+            except:
+                pass
+            
+            show_navigation(9, next_enabled=False)
             return
         except Exception as e:
             st.error(f"❌ Circuit generation failed: {str(e)}")
             import traceback
             with st.expander("🔍 Error Details"):
                 st.code(traceback.format_exc())
-            show_navigation(10, next_enabled=False)
+            show_navigation(9, next_enabled=False)
             return
     
     # 결과 표시
@@ -248,8 +271,7 @@ def page_10_circuit_generation():
         else:
             st.warning("⚠️ SPICE file not generated")
     
-    show_navigation(10, next_enabled=True)
-
+    show_navigation(9, next_enabled=True)
 
 # 11) 오류 검사
 def page_11_error_checking():
@@ -257,12 +279,12 @@ def page_11_error_checking():
     
     if 'spice_file' not in st.session_state or not os.path.exists(st.session_state.spice_file):
         st.error("❌ No SPICE file available for error checking.")
-        show_navigation(11, next_enabled=False)
+        show_navigation(10, next_enabled=False)
         return
     
     if 'circuit_components' not in st.session_state:
         st.error("❌ No circuit components available for error checking.")
-        show_navigation(11, next_enabled=False)
+        show_navigation(10, next_enabled=False)
         return
     
     with st.spinner("🔍 Checking for circuit errors..."):
@@ -288,7 +310,7 @@ def page_11_error_checking():
             
         except Exception as e:
             st.error(f"❌ Error checking failed: {str(e)}")
-            show_navigation(11, next_enabled=True)  # 오류가 있어도 다음 단계로 진행 가능
+            show_navigation(10, next_enabled=True)  # 오류가 있어도 다음 단계로 진행 가능
             return
     
     # 오류 결과 표시
@@ -322,119 +344,85 @@ def page_11_error_checking():
     else:
         st.success("✅ No circuit errors detected! Your circuit looks good.")
     
-    show_navigation(11, next_enabled=True)
+    show_navigation(10, next_enabled=True)
 
 # 12) 최종 요약
 def page_12_summary():
     st.subheader("Step 12: Project Summary")
-    
     # 프로젝트 완료 메시지
     st.balloons()
     st.success("🎉 Breadboard to Schematic conversion completed!")
-    
-    # 요약 정보
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### 📊 Analysis Results")
-        
-        # 컴포넌트 요약
-        if 'final_comps' in st.session_state:
-            comp_summary = {}
-            for comp in st.session_state.final_comps:
-                comp_type = comp['class']
-                comp_summary[comp_type] = comp_summary.get(comp_type, 0) + 1
-            
-            st.write("**Detected Components:**")
-            for comp_type, count in comp_summary.items():
-                st.write(f"• {comp_type}: {count}")
-        
-        # 홀과 넷 요약
-        if 'holes' in st.session_state:
-            st.write(f"**Holes Detected:** {len(st.session_state.holes)}")
-        
-        if 'nets' in st.session_state:
-            st.write(f"**Net Clusters:** {len(st.session_state.nets)}")
-        
-        # 전압 설정
-        if 'voltage' in st.session_state:
-            st.write(f"**Supply Voltage:** {st.session_state.voltage}V")
-    
-    with col2:
-        st.markdown("### 📁 Generated Files")
-        
-        # 다운로드 링크들
-        img_path = os.path.join(BASE_DIR, "circuit.jpg")
-        spice_path = os.path.join(BASE_DIR, "circuit.spice")
-        
-        if os.path.exists(img_path):
-            st.success("✅ Circuit diagram generated")
-            with open(img_path, 'rb') as f:
-                st.download_button(
-                    "📥 Download Circuit Image",
-                    f.read(),
-                    file_name="circuit_diagram.jpg",
-                    mime="image/jpeg"
-                )
-        
-        if os.path.exists(spice_path):
-            st.success("✅ SPICE netlist generated")
-            with open(spice_path, 'rb') as f:
-                st.download_button(
-                    "📥 Download SPICE File",
-                    f.read(),
-                    file_name="circuit.spice",
-                    mime="text/plain"
-                )
-        
-        # GraphML 파일이 있다면
-        graphml_path = os.path.join(BASE_DIR, "circuit.graphml")
-        if os.path.exists(graphml_path):
-            st.success("✅ Circuit graph generated")
-            with open(graphml_path, 'rb') as f:
-                st.download_button(
-                    "📥 Download GraphML",
-                    f.read(),
-                    file_name="circuit.graphml",
-                    mime="application/xml"
-                )
-    
-    # 오류 요약
-    if 'circuit_errors' in st.session_state:
-        if st.session_state.circuit_errors:
-            st.warning(f"⚠️ {len(st.session_state.circuit_errors)} potential issues detected")
-            with st.expander("View Error Details"):
-                for error in st.session_state.circuit_errors:
-                    st.write(f"• {error}")
+
+    # 🔍 Similar Circuit Comparison (text only)
+    st.markdown("### 🔍 Similar Circuit Comparison")
+    import glob, re, os
+    import networkx as nx
+    from checker.Circuit_comparer import CircuitComparer
+
+    # Reference GraphML files directory
+    graphml_dir = os.path.join(BASE_DIR, "checker")
+    ref_files = glob.glob(os.path.join(graphml_dir, "circuit*.graphml"))
+    if ref_files:
+        # Load current circuit graph
+        current_file = os.path.join(BASE_DIR, "circuit.graphml")
+        try:
+            G_curr = nx.read_graphml(current_file)
+        except Exception:
+            G_curr = None
+
+        best_score = -1.0
+        best_file = None
+        if G_curr is not None:
+            for f in ref_files:
+                try:
+                    G_ref = nx.read_graphml(f)
+                    comparer = CircuitComparer(G_curr, G_ref, debug=False)
+                    score = comparer.compute_similarity()
+                    if score > best_score:
+                        best_score = score
+                        best_file = f
+                except Exception:
+                    continue
+        if best_file is not None and best_score >= 0:
+            # Extract topic number from filename
+            m = re.search(r"circuit(\d+)_", os.path.basename(best_file))
+            num = int(m.group(1)) if m else None
+            topic_map = {
+                1: "병렬회로",
+                2: "직렬회로",
+                3: "키르히호프",
+                4: "키르히호프2법칙",
+                5: "중첩의 원리",
+                6: "오실로스코프 실습1",
+                7: "오실로스코프 실습2",
+                8: "반파정류회로",
+                9: "반파정류회로2",
+                10: "비반전 증폭기"
+            }
+            topic = topic_map.get(num, "알 수 없는 주제")
+            st.write(
+                f"**The generated circuit is most similar to the '{topic}' topic**"
+                f" (file: {os.path.basename(best_file)}), similarity score: {best_score:.2f}."
+            )
         else:
-            st.success("✅ No circuit errors detected")
-    
-    # 최종 이미지 표시 (640x640)
-    if 'circuit_img' in st.session_state:
-        st.markdown("### 🔌 Final Circuit Diagram")
-        st.image(cv2.cvtColor(st.session_state.circuit_img, cv2.COLOR_BGR2RGB), 
-                caption=f"Generated Schematic ({DISPLAY_SIZE}x{DISPLAY_SIZE})", 
-                use_container_width=False, width=DISPLAY_SIZE)
-    
-    # 재시작 버튼
+            st.info("ℹ️ No valid circuit comparisons found.")
+    else:
+        st.info("ℹ️ No reference .graphml files found for comparison.")
+
+    # 재시작 및 이전 버튼
     st.markdown("---")
     col1, col2, col3 = st.columns([1, 1, 1])
-    
     with col2:
         if st.button("🔄 Start New Project", key="restart", use_container_width=True):
-            # 세션 상태 초기화
             for key in list(st.session_state.keys()):
-                if key != 'page':  # 페이지는 1로 리셋
+                if key != 'page':
                     del st.session_state[key]
             st.session_state.page = 1
             st.rerun()
-    
-    # 이전 버튼만 표시 (다음 버튼 없음)
     cols = st.columns([1, 2, 1])
     if cols[0].button("◀️ Previous", key="prev_12"):
         st.session_state.page = 11
         st.rerun()
-    
     with cols[1]:
         st.progress(1.0)
         st.write("Project Complete!")

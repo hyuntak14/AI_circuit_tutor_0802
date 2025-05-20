@@ -30,7 +30,7 @@ MAX_DISPLAY_WIDTH = DISPLAY_SIZE
 MAX_DISPLAY_HEIGHT = DISPLAY_SIZE
 
 # 전체 단계 수
-TOTAL_PAGES = 12
+TOTAL_PAGES = 10
 
 # 세션 상태 초기화
 if 'page' not in st.session_state:
@@ -66,6 +66,14 @@ def resize_image(img, target_size=DISPLAY_SIZE):
     resized = cv2.resize(cropped, (target_size, target_size))
     return resized, scale, (start_x, start_y)
 
+def resize_keep_aspect_ratio(img, target_width=640):
+    h, w = img.shape[:2]
+    scale = target_width / w
+    new_h = int(h * scale)
+    resized = cv2.resize(img, (target_width, new_h))
+    return resized, scale
+
+
 def show_navigation(page_num, prev_enabled=True, next_enabled=True):
     """네비게이션 버튼을 표시하고 페이지 전환을 처리합니다."""
     cols = st.columns([1, 2, 1])
@@ -86,106 +94,101 @@ def show_navigation(page_num, prev_enabled=True, next_enabled=True):
         st.session_state.page = min(TOTAL_PAGES, page_num + 1)
         st.rerun()
 
-# 1) 업로드 & 원본 표시
+# 기존 resize_image 대신 새로운 함수 정의
+
+def resize_keep_aspect_ratio(img, target_width=640):
+    h, w = img.shape[:2]
+    scale = target_width / w
+    new_h = int(h * scale)
+    resized = cv2.resize(img, (target_width, new_h))
+    return resized, scale
+
+# 1단계 업로드 함수 수정
+
 def page_1_upload():
-    st.title("📸 Breadboard to Schematic")
+    st.title("\U0001F4F8 Breadboard to Schematic")
     st.write("Upload an image of your breadboard to start the analysis.")
-    
+
     uploaded = st.file_uploader("Choose a breadboard image", type=["jpg", "png", "jpeg"])
-    
+
     if uploaded:
         data = np.frombuffer(uploaded.read(), np.uint8)
         img = cv2.imdecode(data, cv2.IMREAD_COLOR)
-        
-        # main.py 스타일의 이미지 처리 - 640x640으로 고정
-        disp_img, scale, crop_offset = resize_image(img)
-        
+
+        disp_img, scale = resize_keep_aspect_ratio(img, 640)
+
         st.session_state.img = img
         st.session_state.disp_img = disp_img
         st.session_state.scale = scale
-        st.session_state.crop_offset = crop_offset
-        
+
         st.success("✅ Image uploaded successfully!")
-        st.image(cv2.cvtColor(disp_img, cv2.COLOR_BGR2RGB), 
-                caption=f"Uploaded Image (Resized to {DISPLAY_SIZE}x{DISPLAY_SIZE})", 
-                use_container_width=False, width=DISPLAY_SIZE)
-        
+        st.image(cv2.cvtColor(disp_img, cv2.COLOR_BGR2RGB),
+                 caption=f"Uploaded Image (Width: 640px, Preserved Aspect Ratio)",
+                 use_container_width=False)
+
         show_navigation(1, prev_enabled=False, next_enabled=True)
     else:
         st.info("Please upload an image to proceed.")
         show_navigation(1, prev_enabled=False, next_enabled=False)
 
-# 2) 코너 조정
+# 2단계 코너 조정 함수 수정
+
 def page_2_corner_adjust():
     st.subheader("Step 2: Adjust Breadboard Corners")
-    
+
     if 'img' not in st.session_state:
         st.error("Please upload an image first.")
         show_navigation(2, next_enabled=False)
         return
-    
+
     img = st.session_state.img
     disp_img = st.session_state.disp_img
     scale = st.session_state.scale
-    crop_offset = st.session_state.crop_offset
-    
-    # 원본 이미지 크기
-    h, w = img.shape[:2]
-    
-    # 크롭된 영역에서 브레드보드 검출
-    crop_x, crop_y = crop_offset
-    size = min(h, w)
-    cropped_img = img[crop_y:crop_y+size, crop_x:crop_x+size]
-    
-    # Breadboard 검출 (크롭된 이미지에서)
+
     detector = FasterRCNNDetector(model_path=MODEL_PATH)
-    dets = detector.detect(cropped_img)
-    bb = next((box for cls,_,box in dets if cls.lower()=="breadboard"), None)
-    
+    dets = detector.detect(img)
+    bb = next((box for cls, _, box in dets if cls.lower() == "breadboard"), None)
+
     if bb is None:
         st.error("❌ Breadboard not detected in the image.")
         show_navigation(2, next_enabled=False)
         return
-    
-    # 기본 코너 포인트 설정
-    default_pts = [(bb[0],bb[1]),(bb[2],bb[1]),(bb[2],bb[3]),(bb[0],bb[3])]
-    scaled_pts = [(int(x*scale), int(y*scale)) for x,y in default_pts]
-    
-    # 코너 핸들 생성
+
+    default_pts = [(bb[0], bb[1]), (bb[2], bb[1]), (bb[2], bb[3]), (bb[0], bb[3])]
+    scaled_pts = [(int(x * scale), int(y * scale)) for x, y in default_pts]
+
     HANDLE_SIZE = 16
     handles = []
     for cx, cy in scaled_pts:
         handles.append({
-            "type":"rect","left":cx-HANDLE_SIZE//2,"top":cy-HANDLE_SIZE//2,
-            "width":HANDLE_SIZE,"height":HANDLE_SIZE,
-            "stroke":"red","strokeWidth":2,
-            "fill":"rgba(255,0,0,0.3)","cornerColor":"red",
-            "cornerSize":6,"transparentCorners":False
+            "type": "rect", "left": cx - HANDLE_SIZE // 2, "top": cy - HANDLE_SIZE // 2,
+            "width": HANDLE_SIZE, "height": HANDLE_SIZE,
+            "stroke": "red", "strokeWidth": 2,
+            "fill": "rgba(255,0,0,0.3)", "cornerColor": "red",
+            "cornerSize": 6, "transparentCorners": False
         })
-    
+
     st.write("Drag the red handles to adjust the breadboard corners:")
-    
+
     canvas = st_canvas(
-        background_image=Image.fromarray(cv2.cvtColor(disp_img,cv2.COLOR_BGR2RGB)),
-        width=DISPLAY_SIZE, height=DISPLAY_SIZE,
-        drawing_mode="transform", initial_drawing={"objects":handles}, key="corner"
+        background_image=Image.fromarray(cv2.cvtColor(disp_img, cv2.COLOR_BGR2RGB)),
+        width=disp_img.shape[1], height=disp_img.shape[0],
+        drawing_mode="transform", initial_drawing={"objects": handles}, key="corner"
     )
-    
-    # 사용자 조정된 좌표 복원
+
     if canvas.json_data and canvas.json_data.get("objects"):
-        src = [[(o["left"]+o["width"]/2)/scale, (o["top"]+o["height"]/2)/scale]
+        src = [[(o["left"] + o["width"] / 2) / scale, (o["top"] + o["height"] / 2) / scale]
                for o in canvas.json_data["objects"]]
     else:
         src = np.float32(default_pts)
-    
-    # Perspective transformation (main.py와 동일하게 640x640으로)
+
     dst_size = DISPLAY_SIZE
-    M = cv2.getPerspectiveTransform(np.float32(src), 
-                                   np.float32([[0,0],[dst_size,0],[dst_size,dst_size],[0,dst_size]]))
-    warped = cv2.warpPerspective(cropped_img, M, (dst_size, dst_size))
+    M = cv2.getPerspectiveTransform(np.float32(src),
+                                    np.float32([[0, 0], [dst_size, 0], [dst_size, dst_size], [0, dst_size]]))
+    warped = cv2.warpPerspective(img, M, (dst_size, dst_size))
     st.session_state.warped = warped
     st.session_state.warped_raw = warped.copy()
-    
+
     show_navigation(2, next_enabled=True)
 
 # 3) 변환 이미지 확인

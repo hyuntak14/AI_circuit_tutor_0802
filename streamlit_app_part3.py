@@ -30,7 +30,7 @@ MAX_DISPLAY_WIDTH = DISPLAY_SIZE
 MAX_DISPLAY_HEIGHT = DISPLAY_SIZE
 
 # 전체 단계 수
-TOTAL_PAGES = 12
+TOTAL_PAGES = 10
 
 # 세션 상태 초기화
 if 'page' not in st.session_state:
@@ -109,7 +109,32 @@ def page_7_value_input():
         else:
             vals[tuple(pr['bbox'])] = 0.0
     
+    
+
     st.session_state.comp_values = vals
+
+    fixed = []
+    for i, pr in enumerate(st.session_state.pin_results):
+        with st.expander(f"{pr['class']} #{i+1} - {len(pr['pins'])} pins"):
+            coords = []
+            for j, (px, py) in enumerate(pr['pins']):
+                col1, col2 = st.columns(2)
+                with col1:
+                    x = st.number_input(f"Pin {j+1} X", value=float(px), 
+                                       step=1.0, key=f"x_{i}_{j}")
+                with col2:
+                    y = st.number_input(f"Pin {j+1} Y", value=float(py), 
+                                       step=1.0, key=f"y_{i}_{j}")
+                coords.append((x, y))
+            
+            fixed.append({
+                'class': pr['class'],
+                'bbox': pr['bbox'], 
+                'pins': coords,
+                'value': st.session_state.comp_values.get(tuple(pr['bbox']), 0.0)
+            })
+    
+    st.session_state.fixed_pins = fixed
     
     # 입력된 값 요약
     resistor_count = len([pr for pr in st.session_state.pin_results if pr['class'] == 'Resistor'])
@@ -118,7 +143,7 @@ def page_7_value_input():
     else:
         st.info("No resistors detected in this circuit")
     
-    show_navigation(7, next_enabled=True)
+    show_navigation(6, next_enabled=True)
 
 # 8) 핀 좌표 수동 조정
 def page_8_manual_pin_adjustment():
@@ -126,7 +151,7 @@ def page_8_manual_pin_adjustment():
     
     if 'pin_results' not in st.session_state:
         st.error("❌ No pin detection results available.")
-        show_navigation(8, next_enabled=False)
+        show_navigation(7, next_enabled=False)
         return
     
     st.write("Fine-tune pin coordinates if needed:")
@@ -155,7 +180,7 @@ def page_8_manual_pin_adjustment():
     st.session_state.fixed_pins = fixed
     st.success("✅ Pin coordinates finalized")
     
-    show_navigation(8, next_enabled=True)
+    show_navigation(7, next_enabled=True)
 
 # 9) 전원 단자 선택
 def page_9_power_selection():
@@ -163,7 +188,7 @@ def page_9_power_selection():
     
     if 'warped_raw' not in st.session_state:
         st.error("❌ No image available.")
-        show_navigation(9, next_enabled=False)
+        show_navigation(7, next_enabled=False)
         return
     
     # 전압 입력
@@ -193,9 +218,8 @@ def page_9_power_selection():
     if len(power_pts) >= 2:
         st.success(f"✅ Selected {len(power_pts)} power terminals")
         st.session_state.power_points = power_pts[:2]  # 처음 2개만 사용
-        show_navigation(9, next_enabled=True)
+        show_navigation(7, next_enabled=True)
     else:
         st.warning("Please select at least 2 power terminals")
-        show_navigation(9, next_enabled=False)
-
+        show_navigation(7, next_enabled=False)
 # 10) 회로 생성

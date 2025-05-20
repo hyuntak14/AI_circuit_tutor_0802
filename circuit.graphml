@@ -5,34 +5,28 @@
 <key id="d0" for="node" attr.name="comp_class" attr.type="string"/>
 <graph edgedefault="undirected"><node id="R1">
   <data key="d0">Resistor</data>
-  <data key="d1">50.0</data>
+  <data key="d1">100.0</data>
   <data key="d2">6,114</data>
 </node>
 <node id="R2">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">113,156</data>
+  <data key="d2">112,107</data>
 </node>
 <node id="R3">
   <data key="d0">Resistor</data>
-  <data key="d1">200.0</data>
-  <data key="d2">113,156</data>
+  <data key="d1">100.0</data>
+  <data key="d2">112,107</data>
 </node>
 <node id="V1">
   <data key="d0">VoltageSource</data>
-  <data key="d1">5.0</data>
-  <data key="d2">6,156</data>
+  <data key="d1">5.6999999999999975</data>
+  <data key="d2">6,165</data>
 </node>
 <edge source="R1" target="V1">
   <data key="d3">6</data>
 </edge>
 <edge source="R2" target="R3">
-  <data key="d3">113,156</data>
-</edge>
-<edge source="R2" target="V1">
-  <data key="d3">156</data>
-</edge>
-<edge source="R3" target="V1">
-  <data key="d3">156</data>
+  <data key="d3">112,107</data>
 </edge>
 </graph></graphml>

@@ -4,7 +4,7 @@ from streamlit_app_part2 import page_4_component_edit, page_5_hole_detection, pa
 from streamlit_app_part3 import page_7_value_input, page_8_manual_pin_adjustment, page_9_power_selection
 from streamlit_app_part4 import page_10_circuit_generation, page_11_error_checking, page_12_summary
 
-TOTAL_PAGES = 12
+TOTAL_PAGES = 10
 
 def main():
     st.set_page_config(
@@ -17,18 +17,16 @@ def main():
     with st.sidebar:
         st.title("🔌 Navigation")
         page_names = [
-            "1. Upload Image",
-            "2. Adjust Corners", 
-            "3. View Transform",
-            "4. Edit Components",
-            "5. Detect Holes",
-            "6. Detect Pins",
-            "7. Enter Values",
-            "8. Adjust Pins",
-            "9. Select Power",
-            "10. Generate Circuit",
-            "11. Check Errors",
-            "12. Summary"
+        "1. Upload Image",
+        "2. Adjust Corners", 
+        "3. View Transform",
+        "4. Edit Components & Hole Detection",
+        "5. Detect Pins",
+        "6. Enter Values",
+        "7. Select Power",
+        "8. Generate Circuit",
+        "9. Check Errors",
+        "10. Summary"
         ]
         
         current_page = st.session_state.page
@@ -58,20 +56,16 @@ def main():
     elif page == 4:
         page_4_component_edit()
     elif page == 5:
-        page_5_hole_detection()
-    elif page == 6:
         page_6_pin_detection()
-    elif page == 7:
+    elif page == 6:
         page_7_value_input()
-    elif page == 8:
-        page_8_manual_pin_adjustment()
-    elif page == 9:
+    elif page == 7:
         page_9_power_selection()
-    elif page == 10:
+    elif page == 8:
         page_10_circuit_generation()
-    elif page == 11:
+    elif page == 9:
         page_11_error_checking()
-    elif page == 12:
+    elif page == 10:
         page_12_summary()
     else:
         st.error('Invalid page number. Restarting...')
