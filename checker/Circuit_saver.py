@@ -305,7 +305,7 @@ if __name__ == "__main__":
     # Junction 노드 포함 버전
     print("=== Junction 노드를 사용한 병렬 회로 그리기 ===")
     saver = CircuitSaver()
-    saver.draw_and_save("circuit8_rectification.graphml")
+    saver.draw_and_save("circuit9_rectification2.graphml")
     
     # 병렬 회로 감지 (Junction 없이)
     print("\n=== Junction 없이 병렬 회로 감지 ===")

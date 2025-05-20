@@ -240,52 +240,107 @@ def generate_circuit(
 
     # 8) 전원별 회로도 및 연결 그래프 시각화
     for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs, 1):
-        path = output_img.replace('.jpg', f'_pwr{i}.jpg')
+        #path = output_img.replace('.jpg', f'_pwr{i}.jpg')
+        if i == 1:
+            path = output_img
+        else:
+            path = output_img.replace('.jpg', f'_pwr{i}.jpg')
         
-        # ✅ 연결 그래프: 이미 생성된 Graph G를 직접 시각화
+        # ✅ 연결성 검증 추가
+        from diagram import validate_circuit_connectivity
+        
+        connectivity_report = validate_circuit_connectivity(G)
+        
+        if not connectivity_report['is_connected']:
+            print(f"\n🚨 전원 {i} 회로 연결성 문제:")
+            for issue in connectivity_report['issues']:
+                print(f"  - {issue}")
+            
+            # 연결되지 않은 경우 상세 정보 출력
+            print("연결된 그룹:")
+            for j, group in enumerate(connectivity_report['groups']):
+                comp_names = [comp['name'] for comp in group]
+                print(f"  그룹 {j+1}: {comp_names}")
+        
+        # ✅ 연결 그래프: 연결성 정보 포함 (import 오류 해결)
         try:
-            from diagram import draw_connectivity_graph_from_nx
-            draw_connectivity_graph_from_nx(G, output_path=path.replace('.jpg', '_graph.png'))
+            # import 오류를 피하기 위해 조건부 import 사용
+            try:
+                from diagram import draw_connectivity_graph_from_nx_with_issues
+                draw_connectivity_graph_from_nx_with_issues(G, connectivity_report, 
+                                                           output_path=path.replace('.jpg', '_graph.png'))
+            except ImportError:
+                # 함수가 없으면 기본 연결 그래프 함수 사용
+                from diagram import draw_connectivity_graph_from_nx
+                draw_connectivity_graph_from_nx(G, output_path=path.replace('.jpg', '_graph.png'))
+                print(f"✅ 기본 연결성 그래프 저장: {path.replace('.jpg', '_graph.png')}")
         except Exception as e:
             print(f"Failed to generate connectivity graph: {e}")
         
-        # ✅ 회로도: networkx Graph로부터 깔끔한 schemdraw 회로도 생성
+        # ✅ 회로도: 연결성 확인하여 생성 (GUI 오류 해결)
         try:
-            from diagram import drawDiagramFromGraph_fixed
-            d = drawDiagramFromGraph_fixed(G, voltage)
+            # GUI 관련 오류를 피하기 위해 try-except로 감싸기
+            try:
+                from diagram import drawDiagramFromGraph_with_connectivity_check
+                d = drawDiagramFromGraph_with_connectivity_check(G, voltage)
+            except Exception as gui_error:
+                # GUI 오류가 발생하면 기본 다이어그램 생성 시도
+                print(f"GUI 오류로 기본 다이어그램 생성 시도: {gui_error}")
+                from diagram import drawDiagramFromGraph
+                d = drawDiagramFromGraph(G, voltage)
             
             if d:
-                # schemdraw 자체 저장 기능 사용
-                d.draw()
-                d.save(path)
-                print(f"Circuit diagram saved: {path}")
-                
-                # OpenCV 이미지로도 저장 (선택적)
                 try:
-                    from diagram import render_drawing_to_cv2
-                    img_cv = render_drawing_to_cv2(d)
-                    cv2.imwrite(path.replace('.jpg', '_cv.jpg'), img_cv)
-                    print(f"OpenCV version saved: {path.replace('.jpg', '_cv.jpg')}")
-                except Exception as cv_error:
-                    print(f"Warning: Failed to save OpenCV version: {cv_error}")
+                    # 다이어그램 그리기 및 저장 (GUI 오류 방지)
+                    import matplotlib
+                    matplotlib.use('Agg')  # GUI 백엔드 사용 안함
+                    d.draw()
+                    d.save(path)
+                    
+                    # 연결성 문제가 있으면 파일명에 표시
+                    if not connectivity_report['is_connected']:
+                        disconnected_path = path.replace('.jpg', '_DISCONNECTED.jpg')
+                        d.save(disconnected_path)
+                        print(f"⚠️  연결 끊어진 회로도 저장: {disconnected_path}")
+                    else:
+                        print(f"✅ 정상 회로도 저장: {path}")
+                    
+                    # OpenCV 버전 저장 (메인 스레드 오류 방지)
+                    try:
+                        from diagram import render_drawing_to_cv2
+                        img_cv = render_drawing_to_cv2(d)
+                        import cv2
+                        cv2.imwrite(path.replace('.jpg', '_cv.jpg'), img_cv)
+                    except Exception as cv_error:
+                        print(f"Warning: OpenCV 버전 저장 실패: {cv_error}")
+                        
+                except Exception as save_error:
+                    print(f"다이어그램 저장 실패: {save_error}")
             else:
-                print(f"Failed to generate circuit diagram for power pair {i}")
-                # 기존 방식으로 fallback
-                d_fallback = drawDiagram(voltage, mapped, wires, power_plus=(net_p, x_p), power_minus=(net_m, x_m))
-                d_fallback.draw()
-                d_fallback.save(path)
+                print(f"❌ 회로도 생성 실패 (전원 {i})")
                 
         except Exception as diagram_error:
             print(f"Error generating diagram: {diagram_error}")
-            # 최종 fallback - 기존 방식 사용
-            try:
-                d_fallback = drawDiagram(voltage, mapped, wires, power_plus=(net_p, x_p), power_minus=(net_m, x_m))
-                d_fallback.draw()
-                d_fallback.save(path)
-                print(f"Fallback diagram saved: {path}")
-            except Exception as fallback_error:
-                print(f"All diagram generation methods failed: {fallback_error}")
-
+            # 연결성 문제 리포트를 텍스트 파일로 저장
+            report_path = path.replace('.jpg', '_connectivity_report.txt')
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write("회로 연결성 분석 보고서\n")
+                f.write("=" * 30 + "\n\n")
+                f.write(f"연결 상태: {'연결됨' if connectivity_report['is_connected'] else '끊어짐'}\n")
+                f.write(f"그룹 수: {connectivity_report['num_groups']}\n\n")
+                
+                if connectivity_report['issues']:
+                    f.write("문제점:\n")
+                    for issue in connectivity_report['issues']:
+                        f.write(f"- {issue}\n")
+                    f.write("\n")
+                
+                f.write("그룹별 컴포넌트:\n")
+                for j, group in enumerate(connectivity_report['groups']):
+                    comp_names = [comp['name'] for comp in group]
+                    f.write(f"그룹 {j+1}: {comp_names}\n")
+            
+            print(f"📋 연결성 보고서 저장: {report_path}")
     # 9) 전류·전압 해석
     circuit_levels = []
     for lvl, grp in df.groupby('node1_n', sort=False):
@@ -298,13 +353,128 @@ def generate_circuit(
             })
         circuit_levels.append(comps)
 
-    R_th, I_tot, node_currents = calcCurrentAndVoltage(voltage, circuit_levels)
-    print(f"[Circuit] 등가저항: {R_th}, 전체전류: {I_tot}")
-    print("=== Node Voltages/ Currents per Level ===")
-    for i, c in enumerate(node_currents):
-        print(f"Level {i+1}: currents = {c}")
+    #R_th, I_tot, node_currents = calcCurrentAndVoltage(voltage, circuit_levels)
+    #print(f"[Circuit] 등가저항: {R_th}, 전체전류: {I_tot}")
+    #print("=== Node Voltages/ Currents per Level ===")
+    #for i, c in enumerate(node_currents):
+    #    print(f"Level {i+1}: currents = {c}")
 
     return mapped, hole_to_net
+
+def draw_connectivity_graph_from_nx_with_issues(G, connectivity_report, output_path=None):
+    """
+    연결성 문제를 시각적으로 표시하는 연결 그래프
+    """
+    import matplotlib.pyplot as plt
+    import networkx as nx
+    import numpy as np
+    
+    # 기본 그래프 그리기
+    pos = nx.spring_layout(G, seed=42, k=1.5, iterations=50)
+    
+    # 연결된 그룹별로 색상 지정
+    group_colors = plt.cm.Set3(np.linspace(0, 1, len(connectivity_report['groups'])))
+    
+    node_colors = []
+    node_to_group = {}
+    
+    # 각 노드를 해당 그룹 색상으로 매핑
+    for group_idx, group in enumerate(connectivity_report['groups']):
+        for comp in group:
+            node_to_group[comp['name']] = group_idx
+    
+    # 전압원 처리
+    voltage_nodes = [node for node, data in G.nodes(data=True) 
+                    if data.get('comp_class') == 'VoltageSource']
+    
+    for node in G.nodes():
+        if node in voltage_nodes:
+            node_colors.append('red')  # 전압원은 빨간색
+        elif node in node_to_group:
+            group_idx = node_to_group[node]
+            node_colors.append(group_colors[group_idx])
+        else:
+            node_colors.append('gray')  # 미분류는 회색
+    
+    plt.figure(figsize=(12, 8))
+    
+    # 연결되지 않은 경우 제목에 경고 표시
+    if not connectivity_report['is_connected']:
+        title = f"🚨 연결 끊어진 회로 - {connectivity_report['num_groups']}개 그룹"
+        title_color = 'red'
+    else:
+        title = "✅ 연결된 회로"
+        title_color = 'green'
+    
+    plt.suptitle(title, fontsize=16, color=title_color, weight='bold')
+    
+    # 노드 그리기 (연결 상태에 따라 테두리 스타일 변경)
+    if connectivity_report['is_connected']:
+        edge_style = 'solid'
+        linewidth = 1.5
+    else:
+        edge_style = 'dashed'
+        linewidth = 2.0
+    
+    nx.draw_networkx_nodes(G, pos, node_color=node_colors, 
+                          node_size=1500, alpha=0.9, 
+                          edgecolors='black', linewidths=linewidth)
+    
+    # 엣지 그리기 (끊어진 회로는 점선)
+    edge_style = '--' if not connectivity_report['is_connected'] else '-'
+    nx.draw_networkx_edges(G, pos, edge_color='#7F8C8D', 
+                          width=2, alpha=0.7, style=edge_style)
+    
+    # 라벨 그리기
+    node_labels = {}
+    for node, data in G.nodes(data=True):
+        label = str(node)
+        if 'value' in data and data['value'] != 0:
+            comp_type = data.get('comp_class', '')
+            if comp_type == 'Resistor':
+                label += f"\n{data['value']}Ω"
+            elif comp_type == 'VoltageSource':
+                label += f"\n{data['value']}V"
+        node_labels[node] = label
+    
+    nx.draw_networkx_labels(G, pos, labels=node_labels, 
+                           font_size=9, font_weight='bold')
+    
+    # 범례 추가 (그룹별)
+    legend_elements = []
+    for i, group in enumerate(connectivity_report['groups']):
+        group_size = len(group)
+        legend_elements.append(
+            plt.Line2D([0], [0], marker='o', color='w', 
+                      markerfacecolor=group_colors[i],
+                      markersize=10, 
+                      label=f"그룹 {i+1} ({group_size}개 컴포넌트)")
+        )
+    
+    if voltage_nodes:
+        legend_elements.append(
+            plt.Line2D([0], [0], marker='o', color='w', 
+                      markerfacecolor='red',
+                      markersize=10, label="전압원")
+        )
+    
+    plt.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1, 1))
+    
+    # 하단에 문제점 표시
+    if connectivity_report['issues']:
+        issues_text = "문제점:\n" + "\n".join(f"• {issue}" for issue in connectivity_report['issues'])
+        plt.figtext(0.02, 0.02, issues_text, fontsize=10, color='red', 
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow"))
+    
+    plt.axis('off')
+    plt.tight_layout()
+    
+    if output_path:
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        print(f"연결성 그래프 저장: {output_path}")
+    
+    plt.show()
+    return plt.gcf()
 
 
 def build_circuit_graph(mapped_comps):

@@ -1,0 +1,76 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d4" for="edge" attr.name="target_pin" attr.type="string"/>
+<key id="d3" for="edge" attr.name="source_pin" attr.type="string"/>
+<key id="d2" for="node" attr.name="model" attr.type="string"/>
+<key id="d1" for="node" attr.name="value" attr.type="double"/>
+<key id="d0" for="node" attr.name="type" attr.type="string"/>
+<graph edgedefault="directed"><node id="V1">
+  <data key="d0">VoltageSource</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="V2">
+  <data key="d0">VoltageSource</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="I3">
+  <data key="d0">IC</data>
+  <data key="d1">0.0</data>
+  <data key="d2">ua741</data>
+</node>
+<node id="V4">
+  <data key="d0">VoltageSource</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="R5">
+  <data key="d0">Resistor</data>
+  <data key="d1">10.0</data>
+</node>
+<node id="R6">
+  <data key="d0">Resistor</data>
+  <data key="d1">5.1</data>
+</node>
+<node id="J7">
+  <data key="d0">Junction</data>
+  <data key="d1">0.0</data>
+</node>
+<edge source="V1" target="I3">
+  <data key="d3"></data>
+  <data key="d4">3</data>
+</edge>
+<edge source="V1" target="J7">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+<edge source="V2" target="J7">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+<edge source="V2" target="I3">
+  <data key="d3"></data>
+  <data key="d4">4</data>
+</edge>
+<edge source="V4" target="I3">
+  <data key="d3"></data>
+  <data key="d4">7</data>
+</edge>
+<edge source="V4" target="J7">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+<edge source="R5" target="I3">
+  <data key="d3"></data>
+  <data key="d4">6</data>
+</edge>
+<edge source="R6" target="I3">
+  <data key="d3"></data>
+  <data key="d4">2</data>
+</edge>
+<edge source="R6" target="R5">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+<edge source="R6" target="J7">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+</graph></graphml>

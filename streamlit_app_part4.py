@@ -98,10 +98,40 @@ def page_10_circuit_generation():
         show_navigation(10, next_enabled=False)
         return
     
+    # 입력 데이터 검증
+    if not st.session_state.fixed_pins:
+        st.error("❌ No components detected. Please complete previous steps.")
+        show_navigation(10, next_enabled=False)
+        return
+        
+    if not st.session_state.hole_to_net:
+        st.error("❌ No hole-to-net mapping available. Please complete hole detection.")
+        show_navigation(10, next_enabled=False)
+        return
+        
+    if not st.session_state.power_points or len(st.session_state.power_points) < 2:
+        st.error("❌ Please select at least 2 power terminals.")
+        show_navigation(10, next_enabled=False)
+        return
+    
     with st.spinner("⚡ Generating circuit diagram and SPICE file..."):
         try:
+            # nearest_net 함수 정의 (오류 처리 포함)
+            def find_nearest_net(pt):
+                hole_to_net = st.session_state.hole_to_net
+                if not hole_to_net:
+                    raise ValueError("hole_to_net is empty")
+                
+                closest = min(hole_to_net.keys(), key=lambda h: (h[0]-pt[0])**2 + (h[1]-pt[1])**2)
+                return hole_to_net[closest]
+            
             # 전원 쌍 변환 및 단자 찾기 (main.py의 로직 참조)
             all_endpoints = [pt for comp in st.session_state.fixed_pins for pt in comp['pins']]
+            
+            if not all_endpoints:
+                st.error("❌ No component endpoints found. Please check pin detection.")
+                show_navigation(10, next_enabled=False)
+                return
             
             power_pairs = []
             voltage = st.session_state.voltage
@@ -111,19 +141,23 @@ def page_10_circuit_generation():
                 closest_plus = min(all_endpoints, key=lambda p: (p[0]-plus_pt[0])**2 + (p[1]-plus_pt[1])**2)
                 closest_minus = min(all_endpoints, key=lambda p: (p[0]-minus_pt[0])**2 + (p[1]-minus_pt[1])**2)
                 
-                # nearest_net 함수 구현
-                def find_nearest_net(pt):
-                    hole_to_net = st.session_state.hole_to_net
-                    closest = min(hole_to_net.keys(), key=lambda h: (h[0]-pt[0])**2 + (h[1]-pt[1])**2)
-                    return hole_to_net[closest]
-                
                 net_plus = find_nearest_net(closest_plus)
                 net_minus = find_nearest_net(closest_minus)
                 
-                # schemdraw용 그리드 좌표 변환 (640x640 기준)
+                # schemdraw용 그리드 좌표 변환 (640x640 기준) - division by zero 방지
                 img_w = DISPLAY_SIZE
                 comp_count = len([c for c in st.session_state.fixed_pins if c['class'] != 'Line_area'])
+                
+                # division by zero 방지
+                if comp_count == 0:
+                    comp_count = 1  # 최소값 설정
+                    
                 grid_width = comp_count * 2 + 2
+                
+                # 추가 안전장치
+                if grid_width == 0:
+                    grid_width = 4  # 기본값 설정
+                    
                 x_plus_grid = closest_plus[0] / img_w * grid_width
                 x_minus_grid = closest_minus[0] / img_w * grid_width
                 
@@ -133,10 +167,14 @@ def page_10_circuit_generation():
             wires = []
             for comp in st.session_state.fixed_pins:
                 if comp['class'] == 'Line_area' and len(comp['pins']) == 2:
-                    net1 = find_nearest_net(comp['pins'][0])
-                    net2 = find_nearest_net(comp['pins'][1])
-                    if net1 != net2:
-                        wires.append((net1, net2))
+                    try:
+                        net1 = find_nearest_net(comp['pins'][0])
+                        net2 = find_nearest_net(comp['pins'][1])
+                        if net1 != net2:
+                            wires.append((net1, net2))
+                    except Exception as e:
+                        st.warning(f"⚠️ Wire connection error for {comp['class']}: {e}")
+                        continue
             
             # 회로 생성 (640x640 크기로)
             mapped, hole_to_net = generate_circuit(
@@ -151,10 +189,27 @@ def page_10_circuit_generation():
             )
             
             st.session_state.circuit_components = mapped
+            st.session_state.power_pairs = power_pairs  # power_pairs 저장
             st.success("✅ Circuit generated successfully!")
             
+        except ZeroDivisionError as e:
+            st.error(f"❌ Division by zero error: {str(e)}")
+            st.error("This usually happens when:")
+            st.error("- No components are detected")
+            st.error("- Grid width calculation results in zero")
+            st.error("- Invalid coordinate calculations")
+            show_navigation(10, next_enabled=False)
+            return
+        except ValueError as e:
+            st.error(f"❌ Value error: {str(e)}")
+            st.error("Please check if all required data is properly initialized.")
+            show_navigation(10, next_enabled=False)
+            return
         except Exception as e:
             st.error(f"❌ Circuit generation failed: {str(e)}")
+            import traceback
+            with st.expander("🔍 Error Details"):
+                st.code(traceback.format_exc())
             show_navigation(10, next_enabled=False)
             return
     
@@ -169,6 +224,10 @@ def page_10_circuit_generation():
                 st.image(cv2.cvtColor(circuit_img, cv2.COLOR_BGR2RGB), 
                         caption="Generated Circuit Diagram", use_container_width=True)
                 st.session_state.circuit_img = circuit_img
+            else:
+                st.warning("⚠️ Circuit image generated but cannot be loaded")
+        else:
+            st.warning("⚠️ Circuit image not found")
     
     with col2:
         spice_path = os.path.join(BASE_DIR, "circuit.spice")
@@ -186,8 +245,11 @@ def page_10_circuit_generation():
                     mime="text/plain"
                 )
             st.session_state.spice_file = spice_path
+        else:
+            st.warning("⚠️ SPICE file not generated")
     
     show_navigation(10, next_enabled=True)
+
 
 # 11) 오류 검사
 def page_11_error_checking():

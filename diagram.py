@@ -1,5 +1,12 @@
+# diagram.py 파일 상단에 추가할 코드
+
 import matplotlib
-matplotlib.use('Qt5Agg')
+# Streamlit 환경에서 GUI 오류를 방지하기 위해 Agg 백엔드 사용
+import os
+if 'STREAMLIT_SERVER_PORT' in os.environ:
+    matplotlib.use('Agg')
+else:
+    matplotlib.use('Qt5Agg')
 
 import matplotlib.pyplot as plt
 import cv2
@@ -681,6 +688,261 @@ def create_example_circuit(circuit_type='voltage_divider') -> list[dict]:
     else:
         return [{'name':'R1','class':'Resistor','value':1000,'nodes':(1,0)}]
 
+
+# diagram.py에 추가할 개선된 함수들
+
+import networkx as nx
+from collections import defaultdict
+
+def analyze_circuit_connectivity(G):
+    """
+    회로 그래프의 연결 상태를 분석하여 연결된 컴포넌트 그룹들을 반환합니다.
+    
+    Returns:
+        list: 각 원소는 연결된 컴포넌트 그룹 (disconnected인 경우 여러 그룹)
+        bool: 전체 회로가 연결되어 있는지 여부
+    """
+    # 1) 전압원 제외한 그래프 생성 (전압원은 회로 연결성과 별개)
+    non_voltage_nodes = [
+        node for node, data in G.nodes(data=True) 
+        if data.get('comp_class') != 'VoltageSource'
+    ]
+    
+    if not non_voltage_nodes:
+        return [], False
+    
+    # 전압원을 제외한 서브그래프
+    sub_G = G.subgraph(non_voltage_nodes)
+    
+    # 2) 연결된 컴포넌트 그룹 찾기
+    connected_components = list(nx.connected_components(sub_G))
+    
+    # 3) 각 그룹을 컴포넌트 정보로 변환
+    component_groups = []
+    for component_set in connected_components:
+        group = []
+        for node in component_set:
+            node_data = G.nodes[node]
+            group.append({
+                'name': node,
+                'class': node_data.get('comp_class'),
+                'value': node_data.get('value', 0)
+            })
+        component_groups.append(group)
+    
+    # 4) 전체 연결성 확인
+    is_fully_connected = len(connected_components) == 1
+    
+    return component_groups, is_fully_connected
+
+
+def analyze_circuit_topology_improved(G):
+    """
+    개선된 회로 토폴로지 분석 - 연결 상태를 고려함
+    """
+    print("=== 회로 연결성 분석 시작 ===")
+    
+    # 1) 연결 상태 분석
+    component_groups, is_connected = analyze_circuit_connectivity(G)
+    
+    print(f"연결된 그룹 수: {len(component_groups)}")
+    print(f"전체 연결 상태: {'연결됨' if is_connected else '끊어짐'}")
+    
+    if not is_connected:
+        print("⚠️  경고: 회로가 완전히 연결되지 않았습니다!")
+        for i, group in enumerate(component_groups):
+            print(f"  그룹 {i+1}: {[comp['name'] for comp in group]}")
+    
+    # 2) 각 연결된 그룹에 대해 직렬/병렬 분석
+    all_circuit_levels = []
+    
+    for group_idx, group in enumerate(component_groups):
+        print(f"\n--- 그룹 {group_idx+1} 분석 ---")
+        
+        # 해당 그룹만의 서브그래프 생성
+        group_nodes = [comp['name'] for comp in group]
+        group_graph = G.subgraph(group_nodes)
+        
+        # 병렬 구조 분석
+        component_nets = {}
+        for comp_name in group_nodes:
+            nets_str = G.nodes[comp_name].get('nets', '')
+            if nets_str:
+                nets = [int(net) for net in nets_str.split(',')]
+                component_nets[comp_name] = set(nets)
+        
+        # 병렬 그룹 찾기
+        parallel_groups = find_parallel_groups(component_nets)
+        print(f"병렬 그룹: {parallel_groups}")
+        
+        # 컴포넌트 정보와 결합
+        group_levels = []
+        for p_group in parallel_groups:
+            level = []
+            for comp_name in p_group:
+                comp_info = next(comp for comp in group if comp['name'] == comp_name)
+                level.append(comp_info)
+            group_levels.append(level)
+        
+        all_circuit_levels.extend(group_levels)
+    
+    return all_circuit_levels, is_connected
+
+
+def drawDiagramFromGraph_with_connectivity_check(G, voltage=5.0):
+    """
+    연결 상태를 확인하여 끊어진 회로는 별도로 표시하는 개선된 함수
+    """
+    # 1) 연결성 분석
+    circuit_levels, is_connected = analyze_circuit_topology_improved(G)
+    
+    if not circuit_levels:
+        print("❌ 그릴 수 있는 회로 요소가 없습니다.")
+        return None
+    
+    # 2) 연결되지 않은 경우 경고 메시지와 함께 부분 회로도 생성
+    if not is_connected:
+        print("⚠️  주의: 연결되지 않은 회로 요소들이 있습니다. 연결된 부분만 그립니다.")
+        
+        # 각 연결된 그룹별로 별도 다이어그램 생성 가능
+        # 또는 모든 그룹을 하나의 다이어그램에 표시 (점선으로 구분)
+    
+    # 3) 회로도 그리기
+    return drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connected)
+
+
+def drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connected):
+    """
+    연결 끊김을 시각적으로 표시하는 회로도 그리기
+    """
+    import schemdraw
+    import schemdraw.elements as e
+    
+    d = schemdraw.Drawing()
+    
+    # 연결되지 않은 경우 제목에 경고 표시
+    if not is_connected:
+        d += e.Label().label("⚠️ DISCONNECTED CIRCUIT ⚠️").color('red').at((0, 1))
+    
+    d.push()
+    
+    components = []
+    
+    for level_idx, level in enumerate(circuit_levels):
+        level_size = len(level)
+        
+        # 연결 끊김을 나타내는 특별한 처리
+        if level_idx > 0 and not is_connected:
+            # 점선으로 끊어진 연결 표시
+            d += e.Line().linestyle('--').color('red').length(1)
+            d += e.Label().label("BREAK").color('red').fontsize(8)
+        
+        # 기존 레벨 그리기 로직
+        if level_size == 1:
+            comp = level[0]
+            element = get_component_element(comp)
+            d += element
+            
+        elif level_size == 2:
+            # 병렬 2개
+            d += e.Line().right(d.unit/4)
+            d.push()
+            
+            # 위쪽
+            d += e.Line().up(d.unit/2)
+            element1 = get_component_element(level[0])
+            d += element1
+            d += e.Line().down(d.unit/2)
+            d.pop()
+            
+            # 아래쪽  
+            d += e.Line().down(d.unit/2)
+            element2 = get_component_element(level[1])
+            d += element2
+            d += e.Line().up(d.unit/2)
+            
+            d += e.Line().right(d.unit/4)
+            
+        # ... (기타 병렬 조합 처리)
+    
+    # 전원 연결 (연결된 경우만)
+    if is_connected:
+        d += (n1 := e.Dot())
+        d += e.Line().down().at(n1.end)
+        d += (n2 := e.Dot())
+        d.pop()
+        d += (n3 := e.Dot())
+        d += e.SourceV().down().label(f"{voltage}V").at(n3.end).reverse()
+        d += (n4 := e.Dot())
+        d += e.Line().right().endpoints(n4.end, n2.end)
+    else:
+        # 연결되지 않은 경우 전원을 별도로 표시하거나 생략
+        d += e.Label().label("전원 연결 불가 - 회로 끊어짐").color('red')
+    
+    return d
+
+
+def validate_circuit_connectivity(G):
+    """
+    회로의 연결성을 검증하고 문제점을 리포트
+    """
+    component_groups, is_connected = analyze_circuit_connectivity(G)
+    
+    report = {
+        'is_connected': is_connected,
+        'num_groups': len(component_groups),
+        'groups': component_groups,
+        'issues': []
+    }
+    
+    if not is_connected:
+        report['issues'].append(f"회로가 {len(component_groups)}개 그룹으로 분리됨")
+        
+        # 각 그룹의 크기 분석
+        group_sizes = [len(group) for group in component_groups]
+        isolated_components = [i for i, size in enumerate(group_sizes) if size == 1]
+        
+        if isolated_components:
+            isolated_names = [component_groups[i][0]['name'] for i in isolated_components]
+            report['issues'].append(f"고립된 컴포넌트: {isolated_names}")
+        
+        # 전압원 연결 확인
+        has_voltage_source = any(
+            data.get('comp_class') == 'VoltageSource' 
+            for node, data in G.nodes(data=True)
+        )
+        
+        if has_voltage_source and not is_connected:
+            report['issues'].append("전압원이 일부 컴포넌트와 연결되지 않음")
+    
+    return report
+
+
+# circuit_generator.py의 generate_circuit 함수에 추가할 검증 코드
+def add_connectivity_validation_to_generate_circuit():
+    """
+    generate_circuit 함수에 추가할 연결성 검증 코드
+    """
+    # generate_circuit 함수 내에서 그래프 생성 후 추가:
+    
+    # G = build_circuit_graph(mapped) 다음에 추가
+    
+    # 연결성 검증
+    connectivity_report = validate_circuit_connectivity(G)
+    
+    if not connectivity_report['is_connected']:
+        print("\n🚨 회로 연결성 문제 감지!")
+        for issue in connectivity_report['issues']:
+            print(f"  - {issue}")
+        
+        print(f"\n연결된 그룹별 컴포넌트:")
+        for i, group in enumerate(connectivity_report['groups']):
+            component_names = [comp['name'] for comp in group]
+            print(f"  그룹 {i+1}: {component_names}")
+    else:
+        print("\n✅ 회로가 올바르게 연결되었습니다.")
+    
+    return connectivity_report
 
 # 새로운 함수 추가
 def draw_connectivity_graph_from_nx(G, output_path=None):
