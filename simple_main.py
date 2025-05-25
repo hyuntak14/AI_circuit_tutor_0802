@@ -1,0 +1,148 @@
+# main.py (간소화된 버전)
+import os
+import matplotlib
+matplotlib.use('Qt5Agg')
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+import cv2
+import tkinter as tk
+from tkinter import filedialog
+
+from detector.fasterrcnn_detector import FasterRCNNDetector
+from detector.hole_detector import HoleDetector
+from detector.resistor_detector import ResistorEndpointDetector
+from detector.led_detector import LedEndpointDetector
+from detector.wire_detector import WireDetector
+from detector.diode_detector import ResistorEndpointDetector as DiodeEndpointDetector
+from detector.ic_chip_detector import ICChipPinDetector
+from ui.perspective_editor import select_and_transform
+
+# 새로 분리된 클래스들 import
+from ComponentEditor import ComponentEditor
+from pin_manager import PinManager
+from circuit_generator_manager import CircuitGeneratorManager
+
+class SimpleCircuitConverter:
+    def __init__(self):
+        # 기본 검출기들 초기화
+        self.detector = FasterRCNNDetector(r'D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/model/fasterrcnn.pt')
+        self.hole_det = HoleDetector(
+            template_csv_path='detector/template_holes_complete.csv',
+            template_image_path='detector/breadboard18.jpg',
+            max_nn_dist=20.0
+        )
+        
+        # 컴포넌트별 검출기들
+        detectors = {
+            'resistor': ResistorEndpointDetector(),
+            'led': LedEndpointDetector(max_hole_dist=15, visualize=False),
+            'diode': DiodeEndpointDetector(),
+            'ic': ICChipPinDetector(),
+            'wire': WireDetector(kernel_size=4),
+            'hole': self.hole_det
+        }
+        
+        # 컴포넌트 색상
+        self.class_colors = {
+            'Breadboard': (0, 128, 255),
+            'Capacitor': (255, 0, 255),
+            'Diode': (0, 255, 0),
+            'IC': (204, 102, 255),
+            'LED': (102, 0, 102),
+            'Line_area': (255, 0, 0),
+            'Resistor': (200, 170, 0)
+        }
+        
+        # 기능별 매니저 클래스들 초기화
+        self.component_editor = ComponentEditor(self.class_colors)
+        self.pin_manager = PinManager(self.class_colors, detectors)
+        self.circuit_generator = CircuitGeneratorManager(self.hole_det)
+
+    def load_image(self):
+        """이미지 파일 선택 및 로드"""
+        root = tk.Tk()
+        root.withdraw()
+        
+        file_path = filedialog.askopenfilename(
+            title="브레드보드 이미지 선택",
+            filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp")]
+        )
+        root.destroy()
+        
+        if not file_path:
+            return None
+            
+        return cv2.imread(file_path)
+
+    def auto_detect_and_transform(self, img):
+        """자동 브레드보드 검출 및 변환"""
+        print("🔍 브레드보드 자동 검출 중...")
+        comps = self.detector.detect(img)
+        bb = next((b for c, _, b in comps if c.lower() == 'breadboard'), None)
+        
+        if bb is None:
+            print("❌ 브레드보드를 찾을 수 없습니다.")
+            return None
+            
+        print("✅ 브레드보드 검출 완료")
+        warped, _ = select_and_transform(img.copy(), bb)
+        return warped
+
+    def run(self):
+        """전체 프로세스 실행"""
+        print("=" * 50)
+        print("🔌 간소화된 브레드보드 → 회로도 변환기")
+        print("=" * 50)
+        
+        # 1. 이미지 로드
+        img = self.load_image()
+        if img is None:
+            print("❌ 이미지를 선택하지 않았습니다.")
+            return
+        
+        # 2. 브레드보드 자동 검출 및 변환
+        warped = self.auto_detect_and_transform(img)
+        if warped is None:
+            return
+        
+        # 3. 컴포넌트 검출 및 편집 (ComponentEditor 사용)
+        components = self.component_editor.quick_component_detection(warped, self.detector)
+        if not components:
+            print("❌ 컴포넌트가 검출되지 않았습니다.")
+            return
+        
+        # 4. 핀 검출 (PinManager 사용)
+        component_pins, holes = self.pin_manager.auto_pin_detection(warped, components)
+        
+        # 5. 핀 위치 확인 및 수정 단계 (PinManager 사용)
+        component_pins = self.pin_manager.manual_pin_verification_and_correction(warped, component_pins, holes)
+        
+        # 6. 값 입력 (CircuitGeneratorManager 사용)
+        self.circuit_generator.quick_value_input(component_pins)
+        
+        # 7. 전원 선택 (CircuitGeneratorManager 사용)
+        voltage, plus_pt, minus_pt = self.circuit_generator.quick_power_selection(warped, component_pins)
+        
+        # 8. 회로 생성 (CircuitGeneratorManager 사용)
+        success = self.circuit_generator.generate_final_circuit(component_pins, holes, voltage, plus_pt, minus_pt, warped)
+        
+        if success:
+            print("\n🎉 변환 완료!")
+            print("generated files:")
+            print("  - circuit.jpg")
+            print("  - circuit.spice")
+            
+            # 결과 보기
+            try:
+                result_img = cv2.imread('circuit.jpg')
+                if result_img is not None:
+                    cv2.imshow('생성된 회로도', result_img)
+                    cv2.waitKey(0)
+                    cv2.destroyAllWindows()
+            except:
+                pass
+        else:
+            print("❌ 변환에 실패했습니다.")
+
+if __name__ == "__main__":
+    converter = SimpleCircuitConverter()
+    converter.run()
