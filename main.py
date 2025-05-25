@@ -18,7 +18,8 @@ from circuit_generator import generate_circuit
 from detector.diode_detector import ResistorEndpointDetector as DiodeEndpointDetector
 from detector.ic_chip_detector import ICChipPinDetector
 from checker.error_checker import ErrorChecker
-
+import tkinter as tk
+from tkinter import messagebox
 import random
 WINDOW = 'AR Tutor'
 
@@ -140,37 +141,64 @@ def imread_unicode(path):
         data = np.frombuffer(f.read(), dtype=np.uint8)
     return cv2.imdecode(data, cv2.IMREAD_COLOR)
 
-
 def manual_pin_selection(image, box, expected_count):
     x1, y1, x2, y2 = box
     roi = image[y1:y2, x1:x2].copy()
+    
+    # 이미지 크기를 3배로 확대 (코드에서 3배로 확대하고 있음)
+    h, w = roi.shape[:2]
+    roi_resized = cv2.resize(roi, (w*3, h*3), interpolation=cv2.INTER_LINEAR)
+    
     pins = []
     win = 'Manual Pin Selection'
+    
     def mouse_cb(event, x, y, flags, param):
-        nonlocal pins
+        nonlocal pins, roi_resized  # roi_resized를 nonlocal로 선언
+        
         if event == cv2.EVENT_LBUTTONDOWN:
             if len(pins) < expected_count:
-                pins.append((x1 + x, y1 + y))
-                cv2.circle(roi, (x, y), 5, (0, 0, 255), -1)
-                cv2.imshow(win, roi)
+                # 클릭 좌표를 원본 크기로 변환 (3:1 비율로 수정)
+                x_orig = int(x / 3)
+                y_orig = int(y / 3)
+                pins.append((x1 + x_orig, y1 + y_orig))
+                cv2.circle(roi_resized, (x, y), 10, (0, 0, 255), -1)
+                cv2.imshow(win, roi_resized)
+                
         elif event == cv2.EVENT_RBUTTONDOWN:
             # remove last
             if pins:
                 pins.pop()
                 # redraw
-                temp = image[y1:y2, x1:x2].copy()
+                roi_resized = cv2.resize(image[y1:y2, x1:x2].copy(), (w*3, h*3), interpolation=cv2.INTER_LINEAR)
                 for px, py in pins:
-                    cv2.circle(temp, (px - x1, py - y1), 5, (0, 0, 255), -1)
-                roi[:] = temp
+                    # 원본 좌표를 확대 크기로 변환 (3:1 비율로 수정)
+                    disp_x = (px - x1) * 3
+                    disp_y = (py - y1) * 3
+                    cv2.circle(roi_resized, (disp_x, disp_y), 10, (0, 0, 255), -1)
+                cv2.imshow(win, roi_resized)
 
     cv2.namedWindow(win)
+    
+    # 화면 중앙에 윈도우 위치 지정
+    # 화면 해상도 취득 (화면 해상도를 알 수 없는 경우를 대비해 기본값 사용)
+    screen_width, screen_height = 1920, 1080  # 기본 해상도 설정
+    
+    # 윈도우 위치 계산 (중앙) - 3배 크기에 맞게 수정
+    window_x = max(0, (screen_width - w*3) // 2)
+    window_y = max(0, (screen_height - h*3) // 2)
+    
+    # 윈도우 위치 설정
+    cv2.moveWindow(win, window_x, window_y)
+    
     cv2.setMouseCallback(win, mouse_cb)
-    cv2.imshow(win, roi)
+    cv2.imshow(win, roi_resized)
+    
     while True:
         if len(pins) == expected_count:
             break
         if cv2.waitKey(1) == 27:  # ESC to cancel
             break
+    
     cv2.destroyWindow(win)
     return pins
 
@@ -288,42 +316,6 @@ def modify_detections(image, detections):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         cv2.imshow(WINDOW, canvas)
 
-    def mouse_cb(event, x, y, flags, param):
-        nonlocal drawing, ix, iy, detections
-
-        # 드래그 시작
-        if event == cv2.EVENT_LBUTTONDOWN:
-            drawing = True
-            ix, iy = x, y
-
-        # 드래그 중
-        elif event == cv2.EVENT_MOUSEMOVE and drawing:
-            tmp = canvas.copy()
-            cv2.rectangle(tmp, (ix,iy), (x,y), (255,255,255), 1)
-            cv2.imshow(win, tmp)
-
-        # 드래그 종료 → 박스 확정 후 클래스 선택
-        elif event == cv2.EVENT_LBUTTONUP and drawing:
-            drawing = False
-            x1_, x2_ = sorted([ix, x])
-            y1_, y2_ = sorted([iy, y])
-            if abs(x2_-x1_) < 10 or abs(y2_-y1_) < 10:
-                redraw()
-                return
-
-            # tkinter 창 띄워서 클래스 선택
-            root = tk.Tk()
-            root.withdraw()
-            prompt = "추가할 클래스 선택:\n" + \
-                     "\n".join(f"{i+1}. {c}" for i,c in enumerate(class_list))
-            idx = simpledialog.askinteger("Class 선택", prompt,
-                                          minvalue=1, maxvalue=len(class_list))
-            root.destroy()
-            if idx:
-                cls = class_list[idx-1]
-                detections.append((cls, 1.0, (x1_, y1_, x2_, y2_)))
-            redraw()
-
     '''win = "Modify Detections"
     cv2.namedWindow(win)
     cv2.setMouseCallback(win, mouse_cb)
@@ -360,7 +352,7 @@ def main():
     ic_det       = ICChipPinDetector()       # IC 칩 핀 위치 detector
 
     # 이미지 로드 및 브레드보드 검출
-    img = imread_unicode(r'D:\Hyuntak\lab\AR_circuit_tutor\breadboard_project\1.jpg')
+    img = imread_unicode(r'D:\Hyuntak\lab\AR_circuit_tutor\breadboard_project\test.jpg')
     comps = detector.detect(img)
     bb = next((b for c,_,b in comps if c.lower()=='breadboard'), None)
     if bb is None:
@@ -723,16 +715,19 @@ def main():
     # 5) 수정된 mapping 으로 ErrorChecker 생성
     checker = ErrorChecker(components, nets_mapping, ground_nodes={ground_net})
     errors = checker.run_all_checks()
+    # Tkinter 루트 숨기기
+    root = tk.Tk()
+    root.withdraw()
+
     if errors:
-        print("=== Wiring Errors Detected ===")
-        for e in errors:
-            print("·", e)
+        msg = "=== Wiring Errors Detected ===\n" + "\n".join(f"· {e}" for e in errors)
+        # 에러 박스로 표시
+        messagebox.showerror("배선 오류", msg)
     else:
-        print("No wiring errors detected.")
+        # 정보 박스로 표시
+        messagebox.showinfo("배선 검사", "No wiring errors detected.")
 
-
-    for comp in component_pins:
-        print(f"{comp['class']} @ {comp['box']} → pins={comp['pins']}, value={comp['value']}Ω")
+    root.destroy()
 
     
 
