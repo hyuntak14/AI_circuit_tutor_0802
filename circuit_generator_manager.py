@@ -5,6 +5,7 @@ from tkinter import simpledialog, messagebox
 from circuit_generator import generate_circuit
 from checker.error_checker import ErrorChecker
 
+
 class CircuitGeneratorManager:
     def __init__(self, hole_detector):
         self.hole_det = hole_detector
@@ -114,7 +115,7 @@ class CircuitGeneratorManager:
             return voltage, all_endpoints[0], all_endpoints[-1]
 
     def generate_final_circuit(self, component_pins, holes, voltage, plus_pt, minus_pt, warped):
-        """최종 회로 생성 (오류 검출 포함)"""
+        """최종 회로 생성 (paste.txt 방식 완전 적용)"""
         print("🔄 회로도 생성 중...")
         
         try:
@@ -127,17 +128,24 @@ class CircuitGeneratorManager:
                     for x, y in entry['pts']:
                         hole_to_net[(int(round(x)), int(round(y)))] = net_id
             
-            # nearest_net 함수 정의
+            # Union-Find 초기화 (paste.txt 방식)
+            parent = {net: net for net in set(hole_to_net.values())}
+            def find(u):
+                if parent[u] != u:
+                    parent[u] = find(parent[u])
+                return parent[u]
+            def union(u, v):
+                pu, pv = find(u), find(v)
+                if pu != pv:
+                    parent[pv] = pu
+            
+            # nearest_net 함수 정의 (Union-Find 적용)
             def nearest_net(pt):
                 if not hole_to_net:
                     print("⚠️ 경고: hole_to_net이 비어있습니다!")
                     return 0
                 closest = min(hole_to_net.keys(), key=lambda h: (h[0]-pt[0])**2 + (h[1]-pt[1])**2)
-                return hole_to_net[closest]
-            
-            # 전원 매핑
-            net_plus = nearest_net(plus_pt)
-            net_minus = nearest_net(minus_pt)
+                return find(hole_to_net[closest])  # Union-Find로 병합된 최종 넷
             
             # 와이어 연결 처리
             wires = []
@@ -147,47 +155,11 @@ class CircuitGeneratorManager:
                     net2 = nearest_net(comp['pins'][1])
                     if net1 != net2:
                         wires.append((net1, net2))
+                        union(net1, net2)  # Union-Find 적용
             
-            # 🔧 오류 검출을 위한 컴포넌트 매핑 생성 (수정된 버전)
-            print("🔍 회로 오류 검사 중...")
-            
-            # Union-Find 구조로 와이어 병합 처리
-            parent = {net: net for net in set(hole_to_net.values())}
-            
-            def find(u):
-                if parent[u] != u:
-                    parent[u] = find(parent[u])
-                return parent[u]
-            
-            def union(u, v):
-                pu, pv = find(u), find(v)
-                if pu != pv:
-                    parent[pv] = pu
-            
-            # 와이어 연결로 넷 병합
-            for net1, net2 in wires:
-                union(net1, net2)
-            
-            # 병합된 넷으로 전원 재매핑
-            final_net_plus = find(net_plus)
-            final_net_minus = find(net_minus)
-            
-            # 오류 검사용 컴포넌트 매핑 생성
-            mapped_components = self._create_component_mapping_fixed(
-                component_pins, hole_to_net, nearest_net, voltage, 
-                final_net_plus, final_net_minus, wires, find
-            )
-            
-            # 오류 검출 수행
-            error_result = self._check_circuit_errors(mapped_components, final_net_minus)
-            
-            # 오류가 있으면 회로도 생성 중단 여부 결정
-            if not error_result:
-                print("❌ 회로 오류로 인해 회로도 생성을 중단합니다.")
-                return False
-            
-            # 오류가 없거나 사용자가 계속하기로 했으면 실제 회로도 생성 진행
-            print("✅ 회로 오류 검사 통과! 회로도 생성을 계속합니다...")
+            # 전원 매핑 (Union-Find 적용된 최종 넷)
+            net_plus = nearest_net(plus_pt)
+            net_minus = nearest_net(minus_pt)
             
             # schemdraw 그리드 좌표 변환
             img_w = warped.shape[1]
@@ -196,10 +168,11 @@ class CircuitGeneratorManager:
             x_plus_grid = plus_pt[0] / img_w * grid_width
             x_minus_grid = minus_pt[0] / img_w * grid_width
             
-            power_pairs = [(final_net_plus, x_plus_grid, final_net_minus, x_minus_grid)]
+            power_pairs = [(net_plus, x_plus_grid, net_minus, x_minus_grid)]
             
-            # 회로 생성
-            mapped, final_hole_to_net = generate_circuit(
+            # 🔧 1단계: 먼저 generate_circuit 실행 (paste.txt 방식)
+            print("🔄 회로 생성 실행 중...")
+            components, final_hole_to_net = generate_circuit(
                 all_comps=component_pins,
                 holes=holes,
                 wires=wires,
@@ -209,6 +182,16 @@ class CircuitGeneratorManager:
                 hole_to_net=hole_to_net,
                 power_pairs=power_pairs
             )
+            
+            # 🔧 2단계: paste.txt 방식으로 오류 검사
+            print("🔍 회로 오류 검사 중...")
+            error_result = self._check_circuit_errors_paste_style(
+                components, power_pairs, voltage
+            )
+            
+            if not error_result:
+                print("❌ 사용자가 회로도 생성을 취소했습니다.")
+                return False
             
             print("✅ 회로도 생성 완료!")
             print("📁 생성된 파일:")
@@ -222,7 +205,116 @@ class CircuitGeneratorManager:
             import traceback
             traceback.print_exc()
             return False
-    
+
+
+    def _check_circuit_errors_paste_style(self, components, power_pairs, voltage):
+        """paste.txt 방식의 오류 검사 - 중복 전압원 문제 해결"""
+        try:
+            # 🔧 중복 방지: components 복사본으로 작업
+            components_for_check = components.copy()
+            
+            # 1. 기존 전압원 확인
+            existing_voltage_sources = [comp for comp in components_for_check if comp['class'] == 'VoltageSource']
+            print(f"🔍 기존 전압원: {len(existing_voltage_sources)}개")
+            
+            # 2. nets_mapping 생성 (기존 components로)
+            nets_mapping = {}
+            for comp in components_for_check:
+                n1, n2 = comp['nodes']
+                nets_mapping.setdefault(n1, []).append(comp['name'])
+                nets_mapping.setdefault(n2, []).append(comp['name'])
+            
+            # 🔧 3. 전압원이 없는 경우에만 추가 (중복 방지)
+            if not existing_voltage_sources:
+                print("⚠️ 전압원이 없습니다. 추가합니다.")
+                for i, (net_p, _, net_m, _) in enumerate(power_pairs, start=1):
+                    vs_name = f"V{i}"
+                    vs_comp = {
+                        'name': vs_name,
+                        'class': 'VoltageSource',
+                        'value': voltage,
+                        'nodes': (net_p, net_m)
+                    }
+                    components_for_check.append(vs_comp)
+                    nets_mapping.setdefault(net_p, []).append(vs_name)
+                    nets_mapping.setdefault(net_m, []).append(vs_name)
+            else:
+                print("✅ 전압원이 이미 존재합니다. 추가하지 않습니다.")
+            
+            # 4. ground_net 설정 (paste.txt 방식)
+            ground_net = power_pairs[0][2]  # minus 단자의 넷
+            
+            print(f"🔍 ErrorChecker 데이터:")
+            print(f"  - 컴포넌트 수: {len(components_for_check)}")
+            print(f"  - 전압원 수: {len([c for c in components_for_check if c['class'] == 'VoltageSource'])}")
+            print(f"  - 넷 수: {len(nets_mapping)}")
+            print(f"  - Ground 넷: {ground_net}")
+            
+            # 🔧 중복 컴포넌트 확인 (디버깅용)
+            comp_names = [comp['name'] for comp in components_for_check]
+            duplicates = [name for name in set(comp_names) if comp_names.count(name) > 1]
+            if duplicates:
+                print(f"⚠️ 중복된 컴포넌트 이름: {duplicates}")
+                # 중복 제거
+                seen_names = set()
+                unique_components = []
+                for comp in components_for_check:
+                    if comp['name'] not in seen_names:
+                        unique_components.append(comp)
+                        seen_names.add(comp['name'])
+                    else:
+                        print(f"  - 중복 제거: {comp['name']} ({comp['class']})")
+                components_for_check = unique_components
+                
+                # nets_mapping 재생성
+                nets_mapping = {}
+                for comp in components_for_check:
+                    n1, n2 = comp['nodes']
+                    nets_mapping.setdefault(n1, []).append(comp['name'])
+                    nets_mapping.setdefault(n2, []).append(comp['name'])
+            
+            # 5. ErrorChecker 실행 (중복 제거된 데이터로)
+            checker = ErrorChecker(components_for_check, nets_mapping, ground_nodes={ground_net})
+            errors = checker.run_all_checks()
+            
+            # 6. 결과 처리
+            if errors:
+                print(f"⚠️ {len(errors)}개의 회로 오류가 발견되었습니다:")
+                for i, error in enumerate(errors, 1):
+                    print(f"  {i}. {error}")
+                
+                # 사용자에게 오류 알림 및 선택권 제공
+                root = tk.Tk()
+                root.withdraw()
+                
+                error_msg = f"다음 {len(errors)}개의 회로 오류가 발견되었습니다:\n\n"
+                for i, error in enumerate(errors[:5], 1):
+                    error_msg += f"{i}. {error}\n"
+                
+                if len(errors) > 5:
+                    error_msg += f"\n... 및 {len(errors) - 5}개 추가 오류\n"
+                
+                error_msg += "\n그래도 회로도를 생성하시겠습니까?"
+                
+                result = messagebox.askyesno("회로 오류 발견", error_msg)
+                root.destroy()
+                
+                if not result:
+                    return False
+                else:
+                    print("⚠️ 사용자가 오류를 무시하고 회로도 생성을 계속하기로 했습니다.")
+                    return True
+            else:
+                print("✅ 회로 오류가 발견되지 않았습니다!")
+                return True
+                
+        except Exception as e:
+            print(f"⚠️ 오류 검사 중 문제가 발생했습니다: {e}")
+            import traceback
+            traceback.print_exc()
+            print("회로도 생성을 계속합니다...")
+            return True
+
     def _create_component_mapping_fixed(self, component_pins, hole_to_net, nearest_net, 
                                       voltage, net_plus, net_minus, wires, find_func):
         """오류 검출을 위한 개선된 컴포넌트 매핑 생성"""

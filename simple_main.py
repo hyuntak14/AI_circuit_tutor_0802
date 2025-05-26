@@ -23,6 +23,9 @@ from circuit_generator_manager import CircuitGeneratorManager
 
 class SimpleCircuitConverter:
     def __init__(self):
+        # 디스플레이 크기 설정
+        self.display_size = (1200, 1200)
+        
         # 기본 검출기들 초기화
         self.detector = FasterRCNNDetector(r'D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/model/fasterrcnn.pt')
         self.hole_det = HoleDetector(
@@ -56,6 +59,21 @@ class SimpleCircuitConverter:
         self.component_editor = ComponentEditor(self.class_colors)
         self.pin_manager = PinManager(self.class_colors, detectors)
         self.circuit_generator = CircuitGeneratorManager(self.hole_det)
+
+    def _resize_for_display(self, image):
+        """이미지를 1200x1200 크기로 리사이즈"""
+        h, w = image.shape[:2]
+        scale = min(self.display_size[0] / w, self.display_size[1] / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        resized = cv2.resize(image, (new_w, new_h))
+        
+        # 중앙 배치를 위한 패딩
+        pad_w = (self.display_size[0] - new_w) // 2
+        pad_h = (self.display_size[1] - new_h) // 2
+        padded = cv2.copyMakeBorder(resized, pad_h, self.display_size[1] - new_h - pad_h,
+                                   pad_w, self.display_size[0] - new_w - pad_w,
+                                   cv2.BORDER_CONSTANT, value=[0, 0, 0])
+        return padded
 
     def load_image(self):
         """이미지 파일 선택 및 로드"""
@@ -125,23 +143,24 @@ class SimpleCircuitConverter:
         # 8. 회로 생성 (CircuitGeneratorManager 사용)
         success = self.circuit_generator.generate_final_circuit(component_pins, holes, voltage, plus_pt, minus_pt, warped)
         
-        if success:
+'''        if success:
             print("\n🎉 변환 완료!")
             print("generated files:")
             print("  - circuit.jpg")
             print("  - circuit.spice")
             
-            # 결과 보기
+            # 결과 보기 - 1200x1200으로 표시
             try:
                 result_img = cv2.imread('circuit.jpg')
                 if result_img is not None:
-                    cv2.imshow('Final Circuit Diagram', result_img)
+                    display_img = self._resize_for_display(result_img)
+                    cv2.imshow('Final Circuit Diagram', display_img)
                     cv2.waitKey(0)
                     cv2.destroyAllWindows()
             except:
                 pass
         else:
-            print("❌ 변환에 실패했습니다.")
+            print("❌ 변환에 실패했습니다.")'''
 
 if __name__ == "__main__":
     converter = SimpleCircuitConverter()
