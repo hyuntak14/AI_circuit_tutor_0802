@@ -1,4 +1,4 @@
-# main.py (간소화된 버전)
+# main.py (간소화된 버전) - 수정된 버전
 import os
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -103,7 +103,7 @@ class SimpleCircuitConverter:
             
         print("✅ 브레드보드 검출 완료")
         warped, _ = select_and_transform(img.copy(), bb)
-        return warped
+        return warped, bb  # 원본 bounding box도 반환
 
     def run(self):
         """전체 프로세스 실행"""
@@ -118,9 +118,10 @@ class SimpleCircuitConverter:
             return
         
         # 2. 브레드보드 자동 검출 및 변환
-        warped = self.auto_detect_and_transform(img)
-        if warped is None:
+        result = self.auto_detect_and_transform(img)
+        if result is None:
             return
+        warped, original_bb = result  # warped와 원본 bbox 둘 다 받기
         
         # 3. 컴포넌트 검출 및 편집 (ComponentEditor 사용)
         components = self.component_editor.quick_component_detection(warped, self.detector)
@@ -128,8 +129,8 @@ class SimpleCircuitConverter:
             print("❌ 컴포넌트가 검출되지 않았습니다.")
             return
         
-        # 4. 핀 검출 (PinManager 사용)
-        component_pins, holes = self.pin_manager.auto_pin_detection(warped, components)
+        # 4. 핀 검출 (PinManager 사용) - 원본 이미지와 bbox 전달
+        component_pins, holes = self.pin_manager.auto_pin_detection(warped, components, img, original_bb)
         
         # 5. 핀 위치 확인 및 수정 단계 (PinManager 사용)
         component_pins = self.pin_manager.manual_pin_verification_and_correction(warped, component_pins, holes)
@@ -143,24 +144,11 @@ class SimpleCircuitConverter:
         # 8. 회로 생성 (CircuitGeneratorManager 사용)
         success = self.circuit_generator.generate_final_circuit(component_pins, holes, voltage, plus_pt, minus_pt, warped)
         
-'''        if success:
+        if success:
             print("\n🎉 변환 완료!")
             print("generated files:")
             print("  - circuit.jpg")
             print("  - circuit.spice")
-            
-            # 결과 보기 - 1200x1200으로 표시
-            try:
-                result_img = cv2.imread('circuit.jpg')
-                if result_img is not None:
-                    display_img = self._resize_for_display(result_img)
-                    cv2.imshow('Final Circuit Diagram', display_img)
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
-            except:
-                pass
-        else:
-            print("❌ 변환에 실패했습니다.")'''
 
 if __name__ == "__main__":
     converter = SimpleCircuitConverter()

@@ -71,6 +71,103 @@ def test_wire_detector(img_path):
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
+import os
+import glob
+
+def test_all_wire_files():
+    """
+    현재 디렉토리에서 파일명에 'wire'가 포함된 모든 이미지 파일을 찾아서 테스트
+    """
+    # 지원하는 이미지 확장자들
+    image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.tiff', '*.tif']
+    
+    # wire가 포함된 모든 이미지 파일 찾기
+    wire_files = []
+    for ext in image_extensions:
+        # 대소문자 구분없이 찾기
+        pattern = f"*wire*{ext}"
+        wire_files.extend(glob.glob(pattern, recursive=False))
+        
+        # 대문자 확장자도 찾기
+        pattern_upper = f"*wire*{ext.upper()}"
+        wire_files.extend(glob.glob(pattern_upper, recursive=False))
+        
+        # WIRE 대문자도 찾기
+        pattern_wire_upper = f"*WIRE*{ext}"
+        wire_files.extend(glob.glob(pattern_wire_upper, recursive=False))
+        
+        pattern_wire_upper2 = f"*WIRE*{ext.upper()}"
+        wire_files.extend(glob.glob(pattern_wire_upper2, recursive=False))
+    
+    # 중복 제거
+    wire_files = list(set(wire_files))
+    
+    if not wire_files:
+        print("파일명에 'wire'가 포함된 이미지 파일을 찾을 수 없습니다.")
+        print("현재 디렉토리의 파일들:")
+        for f in os.listdir('.'):
+            if any(f.lower().endswith(ext[1:]) for ext in image_extensions):
+                print(f"  - {f}")
+        return
+    
+    print(f"찾은 wire 파일들: {len(wire_files)}개")
+    for f in wire_files:
+        print(f"  - {f}")
+    print()
+    
+    # 각 파일에 대해 테스트 실행
+    for i, img_path in enumerate(sorted(wire_files), 1):
+        print(f"\n{'='*50}")
+        print(f"[{i}/{len(wire_files)}] 처리 중: {img_path}")
+        print(f"{'='*50}")
+        
+        try:
+            test_wire_detector(img_path)
+            print(f"✓ {img_path} 처리 완료")
+        except Exception as e:
+            print(f"✗ {img_path} 처리 실패: {str(e)}")
+            continue
+    
+    print(f"\n{'='*50}")
+    print(f"전체 {len(wire_files)}개 파일 처리 완료")
+    print(f"{'='*50}")
+
+
+def test_specific_wire_files(file_pattern="wire*.jpg"):
+    """
+    특정 패턴의 wire 파일들만 테스트
+    
+    Args:
+        file_pattern (str): 파일 패턴 (예: "wire*.jpg", "*wire*.*")
+    """
+    wire_files = glob.glob(file_pattern)
+    
+    if not wire_files:
+        print(f"패턴 '{file_pattern}'에 맞는 파일을 찾을 수 없습니다.")
+        return
+    
+    print(f"패턴 '{file_pattern}'로 찾은 파일들: {len(wire_files)}개")
+    for f in sorted(wire_files):
+        print(f"  - {f}")
+    print()
+    
+    for i, img_path in enumerate(sorted(wire_files), 1):
+        print(f"\n[{i}/{len(wire_files)}] 처리 중: {img_path}")
+        try:
+            test_wire_detector(img_path)
+            print(f"✓ {img_path} 처리 완료")
+        except Exception as e:
+            print(f"✗ {img_path} 처리 실패: {str(e)}")
+
+
 if __name__ == '__main__':
-    img_path = "wire2.jpg"
-    test_wire_detector(img_path)
+    # 방법 1: 모든 wire 파일 자동 검색 및 테스트
+    test_all_wire_files()
+    
+    # 방법 2: 특정 패턴만 테스트하고 싶은 경우 (주석 해제)
+    # test_specific_wire_files("wire*.jpg")
+    # test_specific_wire_files("*wire*.*")  # 모든 확장자
+    
+    # 방법 3: 기존처럼 특정 파일 하나만 테스트
+    # img_path = "wire4.jpg"
+    # test_wire_detector(img_path)
