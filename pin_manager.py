@@ -59,7 +59,7 @@ class PinManager:
         hole_to_net, net_colors, find = self._setup_network_mapping(warped, holes)
         
         # 메인 루프
-        window_name = '핀 위치 확인 및 수정'
+        window_name = 'Pin Location Validate & Edit'
         verification_mode = False
         
         def mouse_callback(event, x, y, flags, param):

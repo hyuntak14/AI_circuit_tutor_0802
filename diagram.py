@@ -6,6 +6,8 @@ matplotlib.use('TkAgg')  # 또는 'Qt5Agg', 'WxAgg' 등 다른 대화형 백엔�
 # 이후 schemdraw 코드 실행
 # Streamlit 환경에서 GUI 오류를 방지하기 위해 Agg 백엔드 사용
 import os
+from typing import List, Dict
+
 #if 'STREAMLIT_SERVER_PORT' in os.environ:
 #    matplotlib.use('Agg')
 #else:
@@ -22,6 +24,316 @@ import numpy as np
 from PIL import Image
 import cv2
 from collections import defaultdict
+
+# diagram.py에 추가할 함수들
+
+def drawDiagramFromSpice(spice_file: str, output_path: str = None) -> schemdraw.Drawing:
+    """
+    SPICE 넷리스트 파일로부터 회로도를 생성합니다.
+    
+    Args:
+        spice_file: SPICE 넷리스트 파일 경로
+        output_path: 출력 이미지 파일 경로 (선택사항)
+    
+    Returns:
+        schemdraw.Drawing 객체
+    """
+    from spice_parser import SpiceParser
+    
+    # SPICE 파일 파싱
+    parser = SpiceParser()
+    circuit_data = parser.parse_file(spice_file)
+    
+    # 컴포넌트를 networkx 그래프로 변환
+    G = build_graph_from_spice(circuit_data['components'])
+    
+    # 회로 토폴로지 분석
+    circuit_levels = analyze_spice_topology(G, circuit_data['components'])
+    
+    # 회로도 그리기
+    d = drawDiagramFromSpiceComponents(circuit_data['components'], circuit_levels)
+    
+    if output_path:
+        d.save(output_path)
+    
+    return d
+
+
+def build_graph_from_spice(components: List[Dict]) -> nx.Graph:
+    """
+    SPICE 컴포넌트 리스트로부터 networkx 그래프를 생성합니다.
+    """
+    G = nx.Graph()
+    
+    # 노드(넷) 추가
+    all_nodes = set()
+    for comp in components:
+        if isinstance(comp['nodes'], tuple):
+            for node in comp['nodes']:
+                all_nodes.add(node)
+    
+    G.add_nodes_from(all_nodes)
+    
+    # 컴포넌트를 엣지로 추가
+    for comp in components:
+        if comp['type'] in ['Resistor', 'Capacitor', 'Inductor', 'VoltageSource', 
+                           'CurrentSource', 'Diode']:
+            n1, n2 = comp['nodes']
+            G.add_edge(n1, n2, component=comp)
+    
+    return G
+
+
+def analyze_spice_topology(G: nx.Graph, components: List[Dict]) -> List[List[Dict]]:
+    """
+    SPICE 컴포넌트의 토폴로지를 분석하여 직렬/병렬 구조를 파악합니다.
+    """
+    # 그라운드 노드 (0) 찾기
+    ground_node = 0
+    
+    # 전압원 찾기
+    voltage_sources = [c for c in components if c['type'] == 'VoltageSource']
+    
+    if not voltage_sources:
+        # 전압원이 없으면 모든 컴포넌트를 하나의 레벨로
+        return [components]
+    
+    # 병렬 그룹 찾기
+    parallel_groups = find_parallel_components_spice(components)
+    
+    # 직렬 순서 결정
+    circuit_levels = order_series_components_spice(G, parallel_groups, voltage_sources[0])
+    
+    return circuit_levels
+
+
+def find_parallel_components_spice(components: List[Dict]) -> List[List[Dict]]:
+    """
+    같은 두 노드에 연결된 컴포넌트들을 병렬 그룹으로 묶습니다.
+    """
+    groups = []
+    processed = set()
+    
+    for i, comp1 in enumerate(components):
+        if i in processed or comp1['type'] == 'VoltageSource':
+            continue
+        
+        group = [comp1]
+        processed.add(i)
+        
+        # 같은 노드에 연결된 다른 컴포넌트 찾기
+        for j, comp2 in enumerate(components):
+            if j in processed or j == i or comp2['type'] == 'VoltageSource':
+                continue
+            
+            # 두 컴포넌트가 같은 두 노드에 연결되어 있는지 확인
+            if set(comp1['nodes'][:2]) == set(comp2['nodes'][:2]):
+                group.append(comp2)
+                processed.add(j)
+        
+        groups.append(group)
+    
+    return groups
+
+
+def order_series_components_spice(G: nx.Graph, parallel_groups: List[List[Dict]], 
+                                  voltage_source: Dict) -> List[List[Dict]]:
+    """
+    전압원으로부터의 전류 경로를 따라 컴포넌트 그룹을 정렬합니다.
+    """
+    # 전압원의 양극에서 시작
+    start_node = voltage_source['nodes'][0]
+    end_node = voltage_source['nodes'][1]
+    
+    # 각 병렬 그룹의 대표 노드 쌍 추출
+    group_nodes = []
+    for group in parallel_groups:
+        if group:
+            nodes = group[0]['nodes'][:2]
+            group_nodes.append((group, set(nodes)))
+    
+    # 노드 연결 순서에 따라 정렬
+    ordered_groups = []
+    current_node = start_node
+    used_groups = set()
+    
+    while len(ordered_groups) < len(parallel_groups):
+        for i, (group, nodes) in enumerate(group_nodes):
+            if i in used_groups:
+                continue
+            
+            if current_node in nodes:
+                ordered_groups.append(group)
+                used_groups.add(i)
+                # 다음 노드로 이동
+                for node in nodes:
+                    if node != current_node:
+                        current_node = node
+                        break
+                break
+    
+    # 정렬되지 않은 그룹 추가
+    for i, (group, _) in enumerate(group_nodes):
+        if i not in used_groups:
+            ordered_groups.append(group)
+    
+    return ordered_groups
+
+
+def drawDiagramFromSpiceComponents(components: List[Dict], 
+                                   circuit_levels: List[List[Dict]]) -> schemdraw.Drawing:
+    """
+    SPICE 컴포넌트로부터 회로도를 그립니다.
+    """
+    d = schemdraw.Drawing()
+    
+    # 전압원 찾기
+    voltage_sources = [c for c in components if c['type'] == 'VoltageSource']
+    
+    if voltage_sources:
+        # 전압원 그리기
+        vs = voltage_sources[0]
+        d += e.SourceV().label(f"{vs['name']}\n{vs['value']}V")
+        d.push()
+    
+    # 각 레벨의 컴포넌트 그리기
+    for level_idx, level in enumerate(circuit_levels):
+        if not level:
+            continue
+        
+        level_size = len(level)
+        
+        if level_size == 1:
+            # 단일 컴포넌트
+            comp = level[0]
+            element = get_spice_component_element(comp)
+            d += element
+            
+        else:
+            # 병렬 컴포넌트
+            d += e.Line().right(d.unit/4).linewidth(0)
+            d.push()
+            
+            # 병렬 브랜치 그리기
+            spacing = 1.0
+            for i, comp in enumerate(level):
+                if i > 0:
+                    d.pop()
+                    d.push()
+                
+                # 수직 오프셋 계산
+                offset = (i - (level_size-1)/2) * spacing
+                
+                if offset != 0:
+                    d += e.Line().up(offset * d.unit).linewidth(0)
+                
+                element = get_spice_component_element(comp)
+                d += element
+                
+                if offset != 0:
+                    d += e.Line().down(offset * d.unit).linewidth(0)
+            
+            d.pop()
+            d += e.Line().right(d.unit/4).linewidth(0)
+    
+    # 회로 닫기
+    if voltage_sources:
+        d.pop()
+        d += e.Line().down()
+        d += e.Line().left()
+    
+    return d
+
+
+def get_spice_component_element(comp: Dict) -> schemdraw.elements.Element:
+    """
+    SPICE 컴포넌트 정보로부터 schemdraw 엘리먼트를 생성합니다.
+    """
+    comp_type = comp['type']
+    name = comp['name']
+    
+    if comp_type == 'Resistor':
+        value = comp.get('value', 0)
+        label = f"{name}\n{format_value(value, 'Ω')}"
+        return e.Resistor().right().label(label)
+    
+    elif comp_type == 'Capacitor':
+        value = comp.get('value', 0)
+        label = f"{name}\n{format_value(value, 'F')}"
+        return e.Capacitor().right().label(label)
+    
+    elif comp_type == 'Inductor':
+        value = comp.get('value', 0)
+        label = f"{name}\n{format_value(value, 'H')}"
+        return e.Inductor2().right().label(label)
+    
+    elif comp_type == 'Diode':
+        model = comp.get('model', '')
+        label = f"{name}\n{model}" if model else name
+        return e.Diode().right().label(label)
+    
+    elif comp_type == 'CurrentSource':
+        value = comp.get('value', 0)
+        label = f"{name}\n{format_value(value, 'A')}"
+        return e.SourceI().right().label(label)
+    
+    elif comp_type == 'VoltageSource':
+        value = comp.get('value', 0)
+        label = f"{name}\n{value}V"
+        return e.SourceV().right().label(label)
+    
+    else:
+        # 기본값으로 저항 사용
+        return e.Resistor().right().label(name)
+
+
+def format_value(value: float, unit: str) -> str:
+    """
+    숫자 값을 적절한 단위와 함께 포맷팅합니다.
+    """
+    if value == 0:
+        return f"0{unit}"
+    
+    # 단위 접두사
+    prefixes = [
+        (1e12, 'T'), (1e9, 'G'), (1e6, 'M'), (1e3, 'k'),
+        (1, ''), (1e-3, 'm'), (1e-6, 'μ'), (1e-9, 'n'), (1e-12, 'p')
+    ]
+    
+    for scale, prefix in prefixes:
+        if abs(value) >= scale:
+            return f"{value/scale:.2g}{prefix}{unit}"
+    
+    return f"{value:.2e}{unit}"
+
+
+# 기존 generate_circuit 함수 수정
+def generate_circuit_from_spice(spice_file: str, output_img: str):
+    """
+    SPICE 파일로부터 회로도를 생성하는 간단한 래퍼 함수
+    """
+    try:
+        # SPICE 파일로부터 회로도 생성
+        d = drawDiagramFromSpice(spice_file)
+        
+        if d:
+            d.draw()
+            d.save(output_img)
+            print(f"✅ SPICE 기반 회로도 생성 완료: {output_img}")
+            
+            # OpenCV 버전도 저장
+            try:
+                img_cv = render_drawing_to_cv2(d)
+                cv2.imwrite(output_img.replace('.jpg', '_cv.jpg'), img_cv)
+            except Exception as e:
+                print(f"OpenCV 변환 실패: {e}")
+        else:
+            print("❌ 회로도 생성 실패")
+            
+    except Exception as e:
+        print(f"❌ SPICE 파싱 오류: {e}")
+        import traceback
+        traceback.print_exc()
 
 def get_n_clicks(img, window_name, prompts):
     """
@@ -948,7 +1260,7 @@ def add_connectivity_validation_to_generate_circuit():
     return connectivity_report
 
 # 새로운 함수 추가
-def draw_connectivity_graph_from_nx(G, output_path=None):
+def draw_connectivity_graph_from_nx(G, output_path=None, show = False):
     """
     이미 생성된 networkx Graph를 시각화
     """
@@ -1050,7 +1362,8 @@ def draw_connectivity_graph_from_nx(G, output_path=None):
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         print(f"Connectivity graph saved: {output_path}")
     
-    plt.show()
+    if show == True:
+        plt.show()
     return plt.gcf()
 
 

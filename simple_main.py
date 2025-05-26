@@ -135,7 +135,7 @@ class SimpleCircuitConverter:
             try:
                 result_img = cv2.imread('circuit.jpg')
                 if result_img is not None:
-                    cv2.imshow('생성된 회로도', result_img)
+                    cv2.imshow('Final Circuit Diagram', result_img)
                     cv2.waitKey(0)
                     cv2.destroyAllWindows()
             except:

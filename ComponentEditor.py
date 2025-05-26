@@ -22,7 +22,7 @@ class ComponentEditor:
             cv2.putText(vis_img, f"{i+1}:{cls}", (x1, y1-10), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
-        cv2.imshow('검출된 컴포넌트 (Enter: 확인, Space: 수정모드)', vis_img)
+        cv2.imshow('Detected Components (Enter: Validate, Space: Edit mode)', vis_img)
         key = cv2.waitKey(0) & 0xFF
         cv2.destroyAllWindows()
         
@@ -44,7 +44,7 @@ class ComponentEditor:
         editing = True
         drawing = False
         start_point = None
-        window_name = '컴포넌트 편집'
+        window_name = 'Edit Components'
         
         def mouse_callback(event, x, y, flags, param):
             nonlocal drawing, start_point, components

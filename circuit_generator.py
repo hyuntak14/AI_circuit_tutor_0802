@@ -19,6 +19,8 @@ matplotlib.use('TkAgg')  # 또는 'Qt5Agg', 'WxAgg' 등 다른 대화형 백엔�
 # 이후 schemdraw 코드 실행
 import cv2
 import os, glob, re
+from diagram import validate_circuit_connectivity,generate_circuit_from_spice
+from new_diagram import draw_new_diagram
 
 # 실습 주제 맵
 topic_map = {
@@ -186,6 +188,20 @@ def generate_circuit(
     # 7) SPICE 저장
     toSPICE(df, voltage, output_spice)
 
+    # SPICE 파일로부터 schemdraw 다이어그램 생성
+    #spice_diagram = output_img.replace('.jpg', '_new_spice.jpg')
+    #draw_new_diagram(output_spice, spice_diagram)
+
+
+    # 7-1) SPICE 기반 회로도 생성 옵션
+    '''try:
+        # SPICE 파일이 생성되었으면 SPICE 기반으로도 회로도 생성
+        spice_based_path = output_img.replace('.jpg', '_spice_based.jpg')
+        generate_circuit_from_spice(output_spice, spice_based_path)
+        print(f"✅ SPICE 기반 회로도 추가 생성: {spice_based_path}")
+    except Exception as e:
+        print(f"SPICE 기반 회로도 생성 실패: {e}")'''
+
     # 8) 전원별 회로도 및 연결 그래프 시각화
     for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs, 1):
         #path = output_img.replace('.jpg', f'_pwr{i}.jpg')
@@ -195,7 +211,7 @@ def generate_circuit(
             path = output_img.replace('.jpg', f'_pwr{i}.jpg')
         
         # ✅ 연결성 검증 추가
-        from diagram import validate_circuit_connectivity
+        
         
         connectivity_report = validate_circuit_connectivity(G)
         
