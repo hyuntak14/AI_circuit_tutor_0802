@@ -919,7 +919,7 @@ def draw_connectivity_graph(comps, power_plus=None, power_minus=None, output_pat
     plt.axis('off')
     plt.tight_layout()
     if output_path: plt.savefig(output_path, dpi=200)
-    plt.show()
+    #plt.show()
     return G
 
 def render_drawing_to_cv2(drawing: schemdraw.Drawing, dpi: int = 200) -> np.ndarray:
@@ -1311,7 +1311,7 @@ def draw_connectivity_graph_from_nx(G, output_path=None, show = False):
         node_labels[node] = label
     
     # 그래프 그리기
-    plt.figure(figsize=(10, 8))
+    plt.figure(figsize=(20, 16))
     
     # 노드 그리기
     nx.draw_networkx_nodes(G, pos, node_color=node_colors, 
@@ -1361,9 +1361,9 @@ def draw_connectivity_graph_from_nx(G, output_path=None, show = False):
     if output_path:
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         print(f"Connectivity graph saved: {output_path}")
-    
-    if show == True:
-        plt.show()
+    #노드 그래프 시각화 부분
+    '''if show == True:
+        plt.show()'''
     return plt.gcf()
 
 

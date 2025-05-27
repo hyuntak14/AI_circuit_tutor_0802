@@ -12,7 +12,7 @@ class WireDetector:
                  black_min_thickness=6, black_max_thickness=40,
                  black_min_length=40, black_min_area=80,
                  # 빨간색 와이어 필터링 파라미터  
-                 red_min_thickness=10, red_max_thickness=35,
+                 red_min_thickness=18, red_max_thickness=35,
                  red_min_length=30, red_min_area=60,
                  red_aspect_ratio=1.5):
         # 기존 파라미터 유지
@@ -306,22 +306,29 @@ class WireDetector:
         return dists[-2] / dists[-1] if len(dists) > 1 else 0.0
 
     def select_best_endpoints(self, segments):
-        """개선된 최적 끝점 선택"""
-        # 각 색상별 품질 평가
+        """개선된 최적 끝점 선택 - 더 정교한 평가 기준"""
         color_scores = {}
         
         for color in ['white', 'black', 'red']:
             eps = segments.get(color, {}).get('endpoints', [])
             mask = segments.get(color, {}).get('mask', np.zeros((1,1), dtype=np.uint8))
+            skeleton = segments.get(color, {}).get('skeleton', np.zeros((1,1), dtype=np.uint8))
             
             if not eps:
                 color_scores[color] = 0
                 continue
-                
-            # 품질 점수 계산
-            endpoint_score = 1.0 if len(eps) == 2 else max(0, 1.0 - abs(len(eps) - 2) * 0.15)
             
-            # 거리 점수
+            # 1. 끝점 개수 점수 (30%)
+            if len(eps) == 2:
+                endpoint_score = 1.0
+            elif len(eps) == 1:
+                endpoint_score = 0.3  # 1개면 매우 낮은 점수
+            elif len(eps) in [3, 4]:
+                endpoint_score = 0.8
+            else:
+                endpoint_score = max(0, 0.8 - (len(eps) - 4) * 0.1)
+            
+            # 2. 거리 점수 (25%)
             if len(eps) >= 2:
                 distances = []
                 for i in range(len(eps)):
@@ -329,19 +336,98 @@ class WireDetector:
                         d = np.sqrt((eps[i][0] - eps[j][0])**2 + (eps[i][1] - eps[j][1])**2)
                         distances.append(d)
                 max_distance = max(distances) if distances else 0
-                distance_score = min(1.0, max_distance / 150)
+                distance_score = min(1.0, max_distance / 120)  # 120픽셀 기준으로 조정
             else:
                 distance_score = 0
             
-            # 마스크 품질
-            mask_quality = cv2.countNonZero(mask) / max(mask.shape[0] * mask.shape[1], 1)
-            mask_score = min(1.0, mask_quality * 8)
+            # 3. 스켈레톤 연결성 점수 (20%)
+            skeleton_pixels = cv2.countNonZero(skeleton)
+            if skeleton_pixels > 0:
+                # 스켈레톤의 연결 컴포넌트 수 (적을수록 좋음)
+                num_labels, _ = cv2.connectedComponents(skeleton)
+                connectivity_score = max(0, 1.0 - (num_labels - 2) * 0.2)  # 1개 컴포넌트가 이상적
+                
+                # 스켈레톤 길이 점수
+                length_score = min(1.0, skeleton_pixels / 100)  # 100픽셀 기준
+            else:
+                connectivity_score = 0
+                length_score = 0
             
-            total_score = endpoint_score * 0.4 + distance_score * 0.4 + mask_score * 0.2
+            skeleton_score = (connectivity_score + length_score) / 2
+            
+            # 4. 마스크 형태 점수 (15%)
+            mask_pixels = cv2.countNonZero(mask)
+            if mask_pixels > 50:  # 최소 픽셀 수 확인
+                # 컨투어 분석
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if contours:
+                    largest_contour = max(contours, key=cv2.contourArea)
+                    
+                    # 가로세로 비율 (와이어는 길쭉해야 함)
+                    rect = cv2.minAreaRect(largest_contour)
+                    width, height = rect[1]
+                    if min(width, height) > 0:
+                        aspect_ratio = max(width, height) / min(width, height)
+                        aspect_score = min(1.0, (aspect_ratio - 1) / 4)  # 5:1 비율에서 만점
+                    else:
+                        aspect_score = 0
+                    
+                    # 면적 대비 둘레 비율 (선형에 가까울수록 높음)
+                    area = cv2.contourArea(largest_contour)
+                    perimeter = cv2.arcLength(largest_contour, True)
+                    if area > 0:
+                        compactness = (perimeter * perimeter) / (4 * np.pi * area)
+                        compactness_score = min(1.0, compactness / 10)  # 선형일수록 큰 값
+                    else:
+                        compactness_score = 0
+                    
+                    shape_score = (aspect_score + compactness_score) / 2
+                else:
+                    shape_score = 0
+            else:
+                shape_score = 0
+            
+            # 5. 색상별 보정 점수 (10%)
+            color_bonus = 0
+            if color == 'black' and mask_pixels > 0:
+                # 검은색은 브레드보드 구멍과 구분이 잘 되었는지 확인
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if contours:
+                    # 컨투어 개수가 적고 큰 것이 좋음 (구멍들이 잘 걸러짐)
+                    large_contours = [c for c in contours if cv2.contourArea(c) > 100]
+                    if len(large_contours) <= 3:  # 큰 컨투어가 적으면 좋음
+                        color_bonus = 0.8
+            elif color == 'red':
+                # 빨간색은 굵기가 적절한지 확인
+                if mask_pixels > 0:
+                    dist_transform = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+                    avg_thickness = np.mean(dist_transform[dist_transform > 0]) * 2
+                    if 6 <= avg_thickness <= 25:  # 적절한 굵기 범위
+                        color_bonus = 0.8
+            elif color == 'white':
+                # 흰색은 연결성이 중요
+                if skeleton_pixels > 50:
+                    color_bonus = 0.6
+            
+            # 최종 점수 계산
+            total_score = (endpoint_score * 0.30 + 
+                          distance_score * 0.25 + 
+                          skeleton_score * 0.20 + 
+                          shape_score * 0.15 + 
+                          color_bonus * 0.10)
+            
             color_scores[color] = total_score
+            
+            # 디버깅 정보 출력 (필요시 주석 해제)
+            # print(f"{color}: endpoint={endpoint_score:.2f}, distance={distance_score:.2f}, "
+            #       f"skeleton={skeleton_score:.2f}, shape={shape_score:.2f}, "
+            #       f"bonus={color_bonus:.2f}, total={total_score:.2f}")
         
         # 최고 점수 색상 선택
-        best_color = max(color_scores.keys(), key=lambda c: color_scores[c]) if color_scores else 'black'
+        if not color_scores or max(color_scores.values()) == 0:
+            return [], None
+            
+        best_color = max(color_scores.keys(), key=lambda c: color_scores[c])
         best_endpoints = segments.get(best_color, {}).get('endpoints', [])
         
         # 가장 먼 두 점만 선택
@@ -355,6 +441,8 @@ class WireDetector:
                     d = dx*dx + dy*dy
                     if d > max_d:
                         max_d, pair = d, (best_endpoints[i], best_endpoints[j])
+            
+            print(f"선택된 색상: {best_color} (점수: {color_scores[best_color]:.2f})")
             return list(pair), best_color
         
         return best_endpoints, best_color

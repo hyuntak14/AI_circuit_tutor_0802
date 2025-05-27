@@ -24,7 +24,7 @@ from new_diagram import draw_new_diagram
 
 # 실습 주제 맵
 topic_map = {
-    0: "test용 회로", 1: "병렬회로", 2: "직렬회로", 3: "키르히호프 1법칙", 4: "키르히호프 2법칙",
+    0: "test용 회로", 1: "병렬회로", 2: "직렬회로", 3: "키르히호프 2법칙", 4: "키르히호프 2법칙",
     5: "중첩의 원리", 6: "오실로스코프 실습1", 7: "오실로스코프 실습2",
     8: "반파정류회로", 9: "반파정류회로2", 10: "비반전 증폭기"
 }
@@ -227,10 +227,10 @@ def generate_circuit(
                 print(f"  그룹 {j+1}: {comp_names}")
         
         # ✅ 연결 그래프: 연결성 정보 포함 (import 오류 해결)
-        try:
+        '''try:
             # import 오류를 피하기 위해 조건부 import 사용
             try:
-                from diagram import draw_connectivity_graph_from_nx_with_issues
+                #from diagram import draw_connectivity_graph_from_nx_with_issues
                 draw_connectivity_graph_from_nx_with_issues(G, connectivity_report, 
                                                            output_path=path.replace('.jpg', '_graph.png'))
             except ImportError:
@@ -239,7 +239,7 @@ def generate_circuit(
                 draw_connectivity_graph_from_nx(G, output_path=path.replace('.jpg', '_graph.png'))
                 print(f"✅ 기본 연결성 그래프 저장: {path.replace('.jpg', '_graph.png')}")
         except Exception as e:
-            print(f"Failed to generate connectivity graph: {e}")
+            print(f"Failed to generate connectivity graph: {e}")'''
         
         # ✅ 회로도: 연결성 확인하여 생성 (GUI 오류 해결)
         try:
@@ -256,9 +256,18 @@ def generate_circuit(
             if d:
                 try:
                     # 다이어그램 그리기 및 저장 (GUI 오류 방지)
+                    
                     import matplotlib
                     matplotlib.use('TkAgg')  # GUI 백엔드 사용 안함
+                    
+                    import matplotlib.pyplot as plt
+                    plt.figure(figsize=(16, 12))  # 창 크기를 16x12 인치로 설정
+                    
                     d.draw()
+                    
+                    # 🔧 화면에 꽉 차게 표시
+                    plt.tight_layout()
+                    
                     d.save(path)
                     
                     # 연결성 문제가 있으면 파일명에 표시
@@ -449,7 +458,7 @@ def draw_connectivity_graph_from_nx_with_issues(G, connectivity_report, output_p
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         print(f"연결성 그래프 저장: {output_path}")
     
-    plt.show()
+    #plt.show()
     return plt.gcf()
 
 

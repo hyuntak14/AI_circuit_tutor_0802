@@ -58,6 +58,20 @@ class PinManager:
             # warped 좌표를 원본 이미지 좌표로 변환
             orig_box = self._transform_to_original_coords(box, warped, original_bb)
             orig_x1, orig_y1, orig_x2, orig_y2 = orig_box
+
+
+            # 10% 확장
+            width = orig_x2 - orig_x1
+            height = orig_y2 - orig_y1
+            expand_w = int(width * 0.05)
+            expand_h = int(height * 0.05)
+            img_h, img_w = original_img.shape[:2]
+            orig_x1 = max(0, orig_x1 - expand_w)
+            orig_y1 = max(0, orig_y1 - expand_h)
+            orig_x2 = min(img_w, orig_x2 + expand_w)
+            orig_y2 = min(img_h, orig_y2 + expand_h)
+
+            orig_box = (orig_x1, orig_y1, orig_x2, orig_y2)
             
             # 원본 이미지에서 핀 검출
             if cls == 'Resistor':
