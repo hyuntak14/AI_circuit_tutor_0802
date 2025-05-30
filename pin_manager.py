@@ -29,7 +29,9 @@ class PinManager:
             
             try:
                 # 원본 이미지가 있으면 원본에서 핀 검출
-                pins = self._detect_pins_by_class(cls, warped, box, holes, original_img, original_bb)
+                pins, updated_box = self._detect_pins_by_class(cls, warped, box, holes, original_img, original_bb)
+                if updated_box:
+                    box = updated_box
             except Exception as e:
                 print(f"⚠️ {cls} 핀 검출 실패: {e}")
             
@@ -49,89 +51,120 @@ class PinManager:
         print(f"✅ 모든 컴포넌트 핀 처리 완료")
         return component_pins, holes
     
+
+    def _transform_to_warped_coords_box(self, orig_box, original_bb, warped_img):
+        """원본 좌표 box를 warped box로 변환"""
+        orig_x1, orig_y1, orig_x2, orig_y2 = orig_box
+        orig_bb_x1, orig_bb_y1, orig_bb_x2, orig_bb_y2 = original_bb
+        warped_h, warped_w = warped_img.shape[:2]
+        orig_w = orig_bb_x2 - orig_bb_x1
+        orig_h = orig_bb_y2 - orig_bb_y1
+
+        scale_x = warped_w / orig_w
+        scale_y = warped_h / orig_h
+
+        warped_x1 = int((orig_x1 - orig_bb_x1) * scale_x)
+        warped_y1 = int((orig_y1 - orig_bb_y1) * scale_y)
+        warped_x2 = int((orig_x2 - orig_bb_x1) * scale_x)
+        warped_y2 = int((orig_y2 - orig_bb_y1) * scale_y)
+
+        return (warped_x1, warped_y1, warped_x2, warped_y2)
+
     def _detect_pins_by_class(self, cls, warped, box, holes, original_img=None, original_bb=None):
-        """클래스별 핀 검출 - 원본 이미지 사용"""
-        x1, y1, x2, y2 = box
-        
-        # 원본 이미지가 있을 때만 원본에서 검출 시도
+        """
+        clsごとのピン検出。必ず (pins, updated_warped_box or None) のタプルを返す。
+        """
+        # 기본값
+        updated_box = None
+
+        # ① 원본 이미지 기반 검출 시도
         if original_img is not None and original_bb is not None:
-            # warped 좌표를 원본 이미지 좌표로 변환
+            # 원본 좌표계 박스 계산 + 10% 확장
             orig_box = self._transform_to_original_coords(box, warped, original_bb)
-            orig_x1, orig_y1, orig_x2, orig_y2 = orig_box
+            x1o, y1o, x2o, y2o = orig_box
+            w0, h0 = x2o-x1o, y2o-y1o
+            dx, dy = int(w0*0.05), int(h0*0.05)
+            ih, iw = original_img.shape[:2]
+            x1e = max(0, x1o-dx); y1e = max(0, y1o-dy)
+            x2e = min(iw, x2o+dx); y2e = min(ih, y2o+dy)
+            orig_box = (x1e, y1e, x2e, y2e)
 
+            # warped上の拡張box
+            updated_box = self._transform_to_warped_coords_box(orig_box, original_bb, warped)
 
-            # 10% 확장
-            width = orig_x2 - orig_x1
-            height = orig_y2 - orig_y1
-            expand_w = int(width * 0.05)
-            expand_h = int(height * 0.05)
-            img_h, img_w = original_img.shape[:2]
-            orig_x1 = max(0, orig_x1 - expand_w)
-            orig_y1 = max(0, orig_y1 - expand_h)
-            orig_x2 = min(img_w, orig_x2 + expand_w)
-            orig_y2 = min(img_h, orig_y2 + expand_h)
-
-            orig_box = (orig_x1, orig_y1, orig_x2, orig_y2)
-            
-            # 원본 이미지에서 핀 검출
+            # 클래스별 원본検出
             if cls == 'Resistor':
-                result = self.resistor_det.extract(original_img, orig_box)
-                if result and result[0] is not None and result[1] is not None:
-                    # 검출된 핀 좌표를 warped 좌표계로 다시 변환
-                    return self._transform_to_warped_coords(list(result), original_bb, warped)
-            
+                res = self.resistor_det.extract(original_img, orig_box)
+                if res and res[0] is not None and res[1] is not None:
+                    pins = self._transform_to_warped_coords(list(res), original_bb, warped)
+                    return pins, updated_box
+
             elif cls == 'LED':
-                # 원본 이미지의 구멍 좌표도 변환 필요
                 orig_holes = self._transform_holes_to_original(holes, original_bb, warped)
-                result = self.led_det.extract(original_img, orig_box, orig_holes)
-                if result and 'endpoints' in result:
-                    return self._transform_to_warped_coords(result['endpoints'], original_bb, warped)
-            
+                out = self.led_det.extract(original_img, orig_box, orig_holes)
+                if out and 'endpoints' in out:
+                    pins = self._transform_to_warped_coords(out['endpoints'], original_bb, warped)
+                    return pins, updated_box
+
             elif cls == 'Diode':
-                result = self.diode_det.extract(original_img, orig_box)
-                if result and result[0] is not None and result[1] is not None:
-                    return self._transform_to_warped_coords(list(result), original_bb, warped)
-            
+                res = self.diode_det.extract(original_img, orig_box)
+                if res and res[0] is not None and res[1] is not None:
+                    pins = self._transform_to_warped_coords(list(res), original_bb, warped)
+                    return pins, updated_box
+
             elif cls == 'IC':
-                roi = original_img[orig_y1:orig_y2, orig_x1:orig_x2]
-                ics = self.ic_det.detect(roi)
-                if ics:
-                    orig_pins = [(orig_x1 + px, orig_y1 + py) for px, py in ics[0]['pin_points']]
-                    return self._transform_to_warped_coords(orig_pins, original_bb, warped)
-            
+                roi = original_img[y1e:y2e, x1e:x2e]
+                dets = self.ic_det.detect(roi)
+                if dets:
+                    orig_pins = [(x1e+px, y1e+py) for px,py in dets[0]['pin_points']]
+                    pins = self._transform_to_warped_coords(orig_pins, original_bb, warped)
+                    return pins, updated_box
+
             elif cls == 'Line_area':
-                roi = original_img[orig_y1:orig_y2, orig_x1:orig_x2]
+                roi = original_img[y1e:y2e, x1e:x2e]
                 segs = self.wire_det.detect_wires(roi)
-                endpoints, _ = self.wire_det.select_best_endpoints(segs)
-                if endpoints:
-                    orig_pins = [(orig_x1 + pt[0], orig_y1 + pt[1]) for pt in endpoints]
-                    return self._transform_to_warped_coords(orig_pins, original_bb, warped)
-        
-        # 원본 이미지가 없거나 실패했을 때는 기존 방식 사용
+                ends, _ = self.wire_det.select_best_endpoints(segs)
+                if ends:
+                    orig_pins = [(x1e+pt[0], y1e+pt[1]) for pt in ends]
+                    pins = self._transform_to_warped_coords(orig_pins, original_bb, warped)
+                    return pins, updated_box
+
+        # ② warped上에서 fallback 検出
         if cls == 'Resistor':
-            result = self.resistor_det.extract(warped, box)
-            if result and result[0] is not None and result[1] is not None:
-                return list(result)
+            res = self.resistor_det.extract(warped, box)
+            if res and res[0] is not None and res[1] is not None:
+                return list(res), None
+
         elif cls == 'LED':
-            result = self.led_det.extract(warped, box, holes)
-            if result and 'endpoints' in result:
-                return result['endpoints']
+            out = self.led_det.extract(warped, box, holes)
+            if out and 'endpoints' in out:
+                return out['endpoints'], None
+
         elif cls == 'Diode':
-            result = self.diode_det.extract(warped, box)
-            if result and result[0] is not None and result[1] is not None:
-                return list(result)
+            res = self.diode_det.extract(warped, box)
+            if res and res[0] is not None and res[1] is not None:
+                return list(res), None
+
         elif cls == 'IC':
+            x1, y1, x2, y2 = box
             roi = warped[y1:y2, x1:x2]
-            ics = self.ic_det.detect(roi)
-            if ics:
-                return [(x1 + px, y1 + py) for px, py in ics[0]['pin_points']]
+            dets = self.ic_det.detect(roi)
+            if dets:
+                pins = [(x1+px, y1+py) for px,py in dets[0]['pin_points']]
+                return pins, None
+
         elif cls == 'Line_area':
+            x1, y1, x2, y2 = box
             roi = warped[y1:y2, x1:x2]
             segs = self.wire_det.detect_wires(roi)
-            endpoints, _ = self.wire_det.select_best_endpoints(segs)
-            if endpoints:
-                return [(x1 + pt[0], y1 + pt[1]) for pt in endpoints]
-        return []
+            ends, _ = self.wire_det.select_best_endpoints(segs)
+            if ends:
+                pins = [(x1+pt[0], y1+pt[1]) for pt in ends]
+                return pins, None
+
+        # ③ 모두 실패 시
+        return [], None
+
     
     def _transform_to_original_coords(self, warped_box, warped_img, original_bb):
         """warped 좌표를 원본 이미지 좌표로 변환"""

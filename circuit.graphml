@@ -3,39 +3,42 @@
 <key id="d2" for="node" attr.name="nets" attr.type="string"/>
 <key id="d1" for="node" attr.name="value" attr.type="double"/>
 <key id="d0" for="node" attr.name="comp_class" attr.type="string"/>
-<graph edgedefault="undirected"><node id="R1">
-  <data key="d0">Resistor</data>
-  <data key="d1">100.0</data>
-  <data key="d2">187,182</data>
+<graph edgedefault="undirected"><node id="L1">
+  <data key="d0">LED</data>
+  <data key="d1">0.0</data>
+  <data key="d2">184,180</data>
 </node>
-<node id="R2">
-  <data key="d0">Resistor</data>
-  <data key="d1">100.0</data>
-  <data key="d2">182,177</data>
+<node id="C2">
+  <data key="d0">Capacitor</data>
+  <data key="d1">0.0</data>
+  <data key="d2">180,176</data>
 </node>
 <node id="R3">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">178,182</data>
+  <data key="d2">180,176</data>
 </node>
 <node id="V1">
   <data key="d0">VoltageSource</data>
   <data key="d1">5.0</data>
-  <data key="d2">187,177</data>
+  <data key="d2">184,176</data>
 </node>
-<edge source="R1" target="V1">
-  <data key="d3">187</data>
+<edge source="L1" target="V1">
+  <data key="d3">184</data>
 </edge>
-<edge source="R1" target="R2">
-  <data key="d3">182</data>
+<edge source="L1" target="C2">
+  <data key="d3">180</data>
 </edge>
-<edge source="R1" target="R3">
-  <data key="d3">182</data>
+<edge source="L1" target="R3">
+  <data key="d3">180</data>
 </edge>
-<edge source="R2" target="R3">
-  <data key="d3">182</data>
+<edge source="C2" target="R3">
+  <data key="d3">180,176</data>
 </edge>
-<edge source="R2" target="V1">
-  <data key="d3">177</data>
+<edge source="C2" target="V1">
+  <data key="d3">176</data>
+</edge>
+<edge source="R3" target="V1">
+  <data key="d3">176</data>
 </edge>
 </graph></graphml>

@@ -1134,7 +1134,10 @@ def drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connect
     import schemdraw.elements as e
     
     d = schemdraw.Drawing()
+    d.config(unit=3.0)  # 기본 단위 크기를 3배로 확대
+    d.config(fontsize=14)  # 폰트 크기도 키우기
     
+    d.push()
     # 연결되지 않은 경우 제목에 경고 표시
     if not is_connected:
         d += e.Label().label("⚠️ DISCONNECTED CIRCUIT ⚠️").color('red').at((0, 1))

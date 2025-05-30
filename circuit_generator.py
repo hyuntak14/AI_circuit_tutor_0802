@@ -213,7 +213,7 @@ def generate_circuit(
         # ✅ 연결성 검증 추가
         
         
-        connectivity_report = validate_circuit_connectivity(G)
+        '''connectivity_report = validate_circuit_connectivity(G)
         
         if not connectivity_report['is_connected']:
             print(f"\n🚨 전원 {i} 회로 연결성 문제:")
@@ -224,10 +224,10 @@ def generate_circuit(
             print("연결된 그룹:")
             for j, group in enumerate(connectivity_report['groups']):
                 comp_names = [comp['name'] for comp in group]
-                print(f"  그룹 {j+1}: {comp_names}")
+                print(f"  그룹 {j+1}: {comp_names}")'''
         
         # ✅ 연결 그래프: 연결성 정보 포함 (import 오류 해결)
-        '''try:
+        try:
             # import 오류를 피하기 위해 조건부 import 사용
             try:
                 #from diagram import draw_connectivity_graph_from_nx_with_issues
@@ -239,7 +239,7 @@ def generate_circuit(
                 draw_connectivity_graph_from_nx(G, output_path=path.replace('.jpg', '_graph.png'))
                 print(f"✅ 기본 연결성 그래프 저장: {path.replace('.jpg', '_graph.png')}")
         except Exception as e:
-            print(f"Failed to generate connectivity graph: {e}")'''
+            print(f"Failed to generate connectivity graph: {e}")
         
         # ✅ 회로도: 연결성 확인하여 생성 (GUI 오류 해결)
         try:
@@ -260,13 +260,11 @@ def generate_circuit(
                     import matplotlib
                     matplotlib.use('TkAgg')  # GUI 백엔드 사용 안함
                     
-                    import matplotlib.pyplot as plt
-                    plt.figure(figsize=(16, 12))  # 창 크기를 16x12 인치로 설정
+                    
                     
                     d.draw()
                     
-                    # 🔧 화면에 꽉 차게 표시
-                    plt.tight_layout()
+                    
                     
                     d.save(path)
                     
