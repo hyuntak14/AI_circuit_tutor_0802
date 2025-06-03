@@ -120,13 +120,16 @@ class LedEndpointDetector:
 
         # 홀 매핑
         mapped = []
-        for ex, ey in endpoints:
-            dists = [((ex-hx)**2 + (ey-hy)**2, idx) for idx, (hx, hy) in enumerate(holes)]
-            d2, idx = min(dists)
-            if np.sqrt(d2) <= self.max_hole_dist:
-                mapped.append(idx)
-            else:
-                mapped.append(None)
+        if holes:  # holes가 있을 때만 매핑 시도
+            for ex, ey in endpoints:
+                dists = [((ex-hx)**2 + (ey-hy)**2, idx) for idx, (hx, hy) in enumerate(holes)]
+                d2, idx = min(dists)
+                if np.sqrt(d2) <= self.max_hole_dist:
+                    mapped.append(idx)
+                else:
+                    mapped.append(None)
+        else:
+            mapped = [None, None]  # holes가 없을 때는 None으로 처리
 
         return {'endpoints': endpoints, 'holes': mapped}
 
