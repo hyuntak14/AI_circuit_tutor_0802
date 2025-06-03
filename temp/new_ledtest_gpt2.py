@@ -3,13 +3,34 @@ import numpy as np
 from hole_detector2 import HoleDetector
 from skimage.morphology import skeletonize
 
+# --- Import or define LSD detector that returns only raw line coordinates ---
+def lsd_detect_raw(img_gray):
+    """
+    LSD로 선분을 검출하고, 선분 좌표 리스트만 반환합니다.
+    (화면에 그려진 이미지는 여기서 생성하지 않습니다.)
+    """
+    lsd = cv2.createLineSegmentDetector(0)
+    lines, _, _, _ = lsd.detect(img_gray)
+    raw_lines = []
+    if lines is not None:
+        for l in lines:
+            x1, y1, x2, y2 = l[0]
+            raw_lines.append((int(x1), int(y1), int(x2), int(y2)))
+    return raw_lines
+
+def draw_lsd_lines(img_color, lines_to_draw):
+    """
+    img_color 위에 lines_to_draw 리스트의 선분만 초록색으로 그려서 반환합니다.
+    lines_to_draw: [(x1,y1,x2,y2), ...]
+    """
+    out = img_color.copy()
+    for (x1, y1, x2, y2) in lines_to_draw:
+        cv2.line(out, (x1, y1), (x2, y2), (0, 255, 0), 1)
+    return out
+
 # --- 전처리 함수들 ---
 def remove_red_blue(img):
-    """
-    빨강/파랑 영역을 주변 픽셀 색상으로 보간하여 제거합니다.
-    """
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    # 빨강 범위
     lr1 = np.array([0, 100, 100], dtype=np.uint8)
     ur1 = np.array([10, 255, 255], dtype=np.uint8)
     lr2 = np.array([160, 100, 100], dtype=np.uint8)
@@ -18,155 +39,31 @@ def remove_red_blue(img):
         cv2.inRange(hsv, lr1, ur1),
         cv2.inRange(hsv, lr2, ur2)
     )
-    # 파랑 범위
     lb = np.array([100, 150, 50], dtype=np.uint8)
     ub = np.array([140, 255, 255], dtype=np.uint8)
     mask_blue = cv2.inRange(hsv, lb, ub)
-
     mask_rb = cv2.bitwise_or(mask_red, mask_blue)
-    img_inpainted = cv2.inpaint(img, mask_rb, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-    return img_inpainted
+    clean = cv2.bitwise_and(img, img, mask=cv2.bitwise_not(mask_rb))
+    return clean
 
-def apply_clahe(gray, clipLimit=2.0, tileGridSize=(8, 8)):
+def apply_clahe(img_gray, clipLimit=2.0, tileGridSize=(8, 8)):
     clahe = cv2.createCLAHE(clipLimit=clipLimit, tileGridSize=tileGridSize)
-    return clahe.apply(gray)
+    return clahe.apply(img_gray)
 
-def gray_mask_adaptive(gray_clahe, block_size=15, C=5, hole_area_thresh=15):
-    thr = cv2.adaptiveThreshold(
-        gray_clahe, 255,
-        cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,
-        block_size, C
-    )
-    mask = cv2.bitwise_not(thr)
-    hole_mask = np.zeros_like(mask)
-    conts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    for cnt in conts:
-        if cv2.contourArea(cnt) < hole_area_thresh:
-            cv2.drawContours(hole_mask, [cnt], -1, 255, -1)
-    mask_clean = cv2.bitwise_and(mask, cv2.bitwise_not(hole_mask))
-    return mask_clean
-
-def remove_holes(mask, img, hole_radius=7):
-    hd = HoleDetector()
-    centers = hd.detect_holes_raw(img)
-    clean_mask = mask.copy()
-    h, w = clean_mask.shape[:2]
-    half = hole_radius
-    for cx, cy in centers:
-        x_int = int(round(cx))
-        y_int = int(round(cy))
-        x0 = max(x_int - half, 0)
-        y0 = max(y_int - half, 0)
-        x1 = min(x_int + half, w - 1)
-        y1 = min(y_int + half, h - 1)
-        cv2.rectangle(clean_mask, (x0, y0), (x1, y1), 0, -1)
-    return clean_mask
-
-# --- 거리 계산 함수 ---
-def distance(p1, p2):
-    return np.hypot(p1[0] - p2[0], p1[1] - p2[1])
-
-# --- 빈 콜백 함수 ---
-def nothing(x):
-    pass
-
-# --- 리드 검증 함수들 (개선사항 1, 2) ---
-def validate_lead_pair(tip1, tip2, hull_centroid, min_angle=10, max_angle=170):
-    """두 리드 끝점이 유효한 쌍인지 검증"""
-    if hull_centroid is None:
-        return False
-    
-    # 두 리드가 hull 중심에서 보는 각도 계산
-    vec1 = np.array(tip1) - np.array(hull_centroid)
-    vec2 = np.array(tip2) - np.array(hull_centroid)
-    
-    cos_angle = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
-    angle = np.degrees(np.arccos(np.clip(cos_angle, -1, 1)))
-    
-    # LED 리드는 보통 90-180도 사이의 각도를 가짐 (범위 확대)
-    return min_angle <= angle <= max_angle
-
-def calculate_angle_between_leads(tip1, tip2, hull_centroid):
-    """두 리드 사이의 각도 계산"""
-    if hull_centroid is None:
-        return 0
-    
-    vec1 = np.array(tip1) - np.array(hull_centroid)
-    vec2 = np.array(tip2) - np.array(hull_centroid)
-    
-    cos_angle = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
-    angle = np.degrees(np.arccos(np.clip(cos_angle, -1, 1)))
-    
-    return angle
-
-def calculate_line_thickness(cnt, line_params):
-    """컨투어의 평균 두께 계산"""
-    vx, vy, x0, y0 = line_params
-    # 법선 벡터
-    nx, ny = -vy, vx
-    
-    pts = cnt.reshape(-1, 2)
-    # 직선으로부터의 거리들
-    distances = []
-    for pt in pts:
-        d = abs((pt[0] - x0) * nx + (pt[1] - y0) * ny)
-        distances.append(d)
-    
-    return np.mean(distances) * 2  # 평균 두께
-
-# --- 컨투어에서 fitLine 후 끝점 및 직선 파라미터 추출 (수직 제외 로직 포함) ---
-def fit_line_endpoints(cnt, w, h, min_length, max_ratio=0.9, min_thickness=2, max_thickness=15):
-    pts = cnt.reshape(-1, 2).astype(np.float32)
-    if len(pts) < 2:
-        return None
-
-    vx, vy, x0, y0 = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
-    # 거의 수직인 경우 제외
-    if abs(vx) < 0.1:
-        return None
-
-    # 두께 체크 (개선사항 2)
-    params = (vx, vy, x0, y0)
-    thickness = calculate_line_thickness(cnt, params)
-    if thickness < min_thickness or thickness > max_thickness:
-        return None
-
-    diffs = pts - np.array([[x0, y0]], dtype=np.float32)
-    ts = diffs.dot(np.array([vx, vy], dtype=np.float32))
-    t_min, t_max = ts.min(), ts.max()
-
-    p1 = (int(round(x0 + vx * t_min)), int(round(y0 + vy * t_min)))
-    p2 = (int(round(x0 + vx * t_max)), int(round(y0 + vy * t_max)))
-    length = distance(p1, p2)
-    if length < min_length:
-        return None
-
-    dx = abs(p1[0] - p2[0])
-    dy = abs(p1[1] - p2[1])
-    if dx >= max_ratio * w or dy >= max_ratio * h:
-        return None
-
-    for (x, y) in (p1, p2):
-        if x <= 1 or x >= w - 2 or y <= 1 or y >= h - 2:
-            return None
-
-    return p1, p2, params, thickness
-
-# --- 스켈레톤 + 엔드포인트 추출 ---
-def skeleton_and_endpoints(binary_img):
-    bw = (binary_img // 255).astype(np.uint8)
-    skel = skeletonize(bw).astype(np.uint8) * 255
-    endpoints = []
-    H, W = skel.shape
+# --- 스켈레톤 가지치기 함수 (이웃 기반) ---
+def prune_skeleton_neighborhood(skel_bin):
+    pruned = skel_bin.copy()
+    H, W = pruned.shape
+    result = np.zeros_like(pruned)
     for y in range(1, H - 1):
         for x in range(1, W - 1):
-            if skel[y, x] == 255:
-                nb = np.count_nonzero(skel[y-1:y+2, x-1:x+2]) - 1
-                if nb == 1:
-                    endpoints.append((x, y))
-    return skel, endpoints
+            if pruned[y, x] == 1:
+                nb = np.count_nonzero(pruned[y-1:y+2, x-1:x+2]) - 1
+                if nb >= 2:
+                    result[y, x] = 1
+    return result
 
-# --- 스켈레톤 끝점 클러스터링 (5픽셀 이내) ---
+# --- 엔드포인트 클러스터링 함수 ---
 def cluster_endpoints(endpoints, thresh=5):
     clusters = []
     for pt in endpoints:
@@ -187,14 +84,65 @@ def cluster_endpoints(endpoints, thresh=5):
         clustered.append((avg_x, avg_y))
     return clustered
 
+# --- 스켈레톤 기반 끝점 추출 함수 ---
+def get_skeleton_endpoints(binary_img, enable_prune):
+    bw = (binary_img // 255).astype(np.uint8)
+    skel_bin = skeletonize(bw).astype(np.uint8)
+    if enable_prune:
+        skel_bin = prune_skeleton_neighborhood(skel_bin)
+    endpoints = []
+    H, W = skel_bin.shape
+    for y in range(1, H - 1):
+        for x in range(1, W - 1):
+            if skel_bin[y, x] == 1:
+                nb = np.count_nonzero(skel_bin[y - 1:y + 2, x - 1:x + 2]) - 1
+                if nb == 1:
+                    endpoints.append((x, y))
+    return cluster_endpoints(endpoints, thresh=5), skel_bin
+
+# --- 그레이 마스크 기반 끝점 추출 함수 ---
+def get_gray_mask_endpoints(img, sat_thresh=40, val_low=60, val_high=200):
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1]
+    val = hsv[:, :, 2]
+    mask = cv2.inRange(sat, sat_thresh, 255)
+    mask = cv2.bitwise_and(mask, cv2.inRange(val, val_low, val_high))
+    # 모폴로지 처리
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    mask_gray = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k, iterations=1)
+    mask_gray = cv2.morphologyEx(mask_gray, cv2.MORPH_CLOSE, k, iterations=1)
+    conts, _ = cv2.findContours(mask_gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    endpoints = []
+    for cnt in conts:
+        if cv2.contourArea(cnt) < 20:
+            continue
+        x, y, w, h = cv2.boundingRect(cnt)
+        roi = np.zeros_like(mask_gray[y:y+h, x:x+w])
+        cnt_shifted = cnt - [x, y]
+        cv2.drawContours(roi, [cnt_shifted], -1, 255, thickness=cv2.FILLED)
+        bw_roi = (roi // 255).astype(np.uint8)
+        skel_roi = skeletonize(bw_roi).astype(np.uint8)
+        hh, ww = skel_roi.shape
+        for yy in range(1, hh - 1):
+            for xx in range(1, ww - 1):
+                if skel_roi[yy, xx] == 1:
+                    nb = np.count_nonzero(skel_roi[yy - 1:yy + 2, xx - 1:xx + 2]) - 1
+                    if nb == 1:
+                        endpoints.append((x + xx, y + yy))
+    return cluster_endpoints(endpoints, thresh=5), mask_gray
+
+# --- 거리 계산 함수 ---
+def distance(p1, p2):
+    return np.hypot(p1[0] - p2[0], p1[1] - p2[1])
+
 # --- 메인 실행부 ---
 if __name__ == "__main__":
     image_files = [
         f for f in __import__('os').listdir('.')
-        if any(k in f.lower() for k in ['led', 'cappp']) and f.lower().endswith(('.png', '.jpg', '.jpeg'))
+        if ('led' in f.lower()) and f.lower().endswith(('.png', '.jpg', '.jpeg'))
     ]
     if not image_files:
-        print("폴더 내에 'led' 또는 'cap'이 포함된 이미지가 없습니다.")
+        print("폴더 내에 'led'가 포함된 이미지가 없습니다.")
         exit()
 
     idx = 0
@@ -203,72 +151,52 @@ if __name__ == "__main__":
         print(f"{image_files[idx]}를 읽을 수 없습니다.")
         exit()
     h, w = img.shape[:2]
-
-    # --- LED 몸체 검출: HSV에서 빨강·초록·노랑 영역 이진화 & 모폴로지 정제 ---
+    # HSV 범위 세팅 (색상별 분리)
     hsv_full = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-    # 빨강 범위
     r1_low = np.array([0, 100, 100], dtype=np.uint8)
     r1_high = np.array([10, 255, 255], dtype=np.uint8)
     r2_low = np.array([160, 100, 100], dtype=np.uint8)
     r2_high = np.array([180, 255, 255], dtype=np.uint8)
-    mask_red = cv2.bitwise_or(
-        cv2.inRange(hsv_full, r1_low, r1_high),
-        cv2.inRange(hsv_full, r2_low, r2_high)
-    )
-    # 초록 범위
-    g_low = np.array([40,  50,  50], dtype=np.uint8)
+    g_low = np.array([40, 50, 50], dtype=np.uint8)
     g_high = np.array([80, 255, 255], dtype=np.uint8)
-    mask_green = cv2.inRange(hsv_full, g_low, g_high)
-    # 노랑 범위
-    y_low = np.array([20, 100, 100], dtype=np.uint8)
-    y_high = np.array([30, 255, 255], dtype=np.uint8)
-    mask_yellow = cv2.inRange(hsv_full, y_low, y_high)
+    y_low = np.array([18, 80, 100], dtype=np.uint8)
+    y_high = np.array([35, 255, 255], dtype=np.uint8)
 
-    mask_body = cv2.bitwise_or(cv2.bitwise_or(mask_red, mask_green), mask_yellow)
-    # 모폴로지 정제
-    kernel_body = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask_body_clean = cv2.morphologyEx(mask_body, cv2.MORPH_OPEN, kernel_body, iterations=2)
-    mask_body_clean = cv2.morphologyEx(mask_body_clean, cv2.MORPH_CLOSE, kernel_body, iterations=2)
-
-    # 가장 큰 컨투어 검출 후 convex hull 계산
-    conts_body, _ = cv2.findContours(mask_body_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    hull = None
-    hull_centroid = None
-    if conts_body:
-        largest_cont = max(conts_body, key=lambda c: cv2.contourArea(c))
-        hull = cv2.convexHull(largest_cont)
-        M = cv2.moments(hull)
-        if M["m00"] != 0:
-            hull_centroid = (M["m10"] / M["m00"], M["m01"] / M["m00"])
-        else:
-            hull_centroid = None
-
-    win_name = "Contour + Skeleton Visualization"
+    # 윈도우와 트랙바 설정
+    win_name = "Lead Detection Improved"
     cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(win_name, w * 2, h * 2)
+    # 트랙바 콜백
+    def nothing(x):
+        pass
 
-    # 트랙바: 전처리 파라미터 + 최소 길이 + 두께 파라미터 (개선사항 6)
-    cv2.createTrackbar("block_size",       win_name, 15, 51, nothing)
-    cv2.createTrackbar("C",                win_name, 5, 20, nothing)
-    cv2.createTrackbar("CLAHE_clip",       win_name, 2, 10, nothing)
-    cv2.createTrackbar("hole_radius",      win_name, 7, 20, nothing)
-    cv2.createTrackbar("hole_area_thresh", win_name, 15, 100, nothing)
-    cv2.createTrackbar("Canny_th1",        win_name, 50, 200, nothing)
-    cv2.createTrackbar("Canny_th2",        win_name, 150, 300, nothing)
-    cv2.createTrackbar("min_length",       win_name, 20, max(w, h), nothing)
+    cv2.createTrackbar("hole_radius", win_name, 5, 50, nothing)
+    cv2.createTrackbar("hole_area_thresh", win_name, 50, 500, nothing)
+    cv2.createTrackbar("Canny_th1", win_name, 50, 300, nothing)
+    cv2.createTrackbar("Canny_th2", win_name, 150, 300, nothing)
+    cv2.createTrackbar("min_length", win_name, 20, max(w, h), nothing)
     cv2.createTrackbar("lead_thickness_min", win_name, 2, 10, nothing)
     cv2.createTrackbar("lead_thickness_max", win_name, 15, 30, nothing)
     cv2.createTrackbar("hull_proximity", win_name, 30, 100, nothing)
+    cv2.createTrackbar("match_dist_thresh", win_name, 10, 50, nothing)
+    cv2.createTrackbar("Use_Otsu", win_name, 0, 1, nothing)
+    cv2.createTrackbar("Apply_Sharpen", win_name, 0, 1, nothing)
+    cv2.createTrackbar("Apply_Smooth", win_name, 0, 1, nothing)
+    cv2.createTrackbar("Enable_Pruning", win_name, 0, 1, nothing)
+    cv2.createTrackbar("Gray_S", win_name, 30, 100, nothing)
+    cv2.createTrackbar("Gray_V_low", win_name, 60, 255, nothing)
+    cv2.createTrackbar("Gray_V_high", win_name, 200, 255, nothing)
+    cv2.createTrackbar("Open_iter", win_name, 1, 5, nothing)
+    cv2.createTrackbar("Close_iter", win_name, 1, 5, nothing)
+    cv2.createTrackbar("BB_Open", win_name, 1, 5, nothing)
+    cv2.createTrackbar("BB_Close", win_name, 1, 5, nothing)
+    cv2.createTrackbar("BB_Erode", win_name, 1, 5, nothing)
+    cv2.createTrackbar("BB_Dilate", win_name, 1, 5, nothing)
+    cv2.createTrackbar("CLAHE_clip", win_name, 2, 10, nothing)
+    cv2.createTrackbar("block_size", win_name, 11, 51, nothing)
 
     while True:
-        h, w = img.shape[:2]
-
-        blk = cv2.getTrackbarPos("block_size", win_name)
-        if blk < 3: blk = 3
-        if blk % 2 == 0: blk += 1
-        Cval = cv2.getTrackbarPos("C", win_name)
-        clahe_clip = cv2.getTrackbarPos("CLAHE_clip", win_name)
+        # 트랙바 값 읽기
         hole_r = cv2.getTrackbarPos("hole_radius", win_name)
         hole_area = cv2.getTrackbarPos("hole_area_thresh", win_name)
         canny1 = cv2.getTrackbarPos("Canny_th1", win_name)
@@ -278,24 +206,53 @@ if __name__ == "__main__":
         lead_thickness_min = cv2.getTrackbarPos("lead_thickness_min", win_name)
         lead_thickness_max = cv2.getTrackbarPos("lead_thickness_max", win_name)
         hull_proximity = cv2.getTrackbarPos("hull_proximity", win_name)
+        match_dist_thresh = cv2.getTrackbarPos("match_dist_thresh", win_name)
+        use_otsu = cv2.getTrackbarPos("Use_Otsu", win_name) == 1
+        apply_sharpen = cv2.getTrackbarPos("Apply_Sharpen", win_name) == 1
+        apply_smooth = cv2.getTrackbarPos("Apply_Smooth", win_name) == 1
+        enable_prune = cv2.getTrackbarPos("Enable_Pruning", win_name) == 1
+        sat_thresh = cv2.getTrackbarPos("Gray_S", win_name)
+        val_low = cv2.getTrackbarPos("Gray_V_low", win_name)
+        val_high = cv2.getTrackbarPos("Gray_V_high", win_name)
+        if val_low > val_high:
+            val_low = val_high
+        open_iter = cv2.getTrackbarPos("Open_iter", win_name)
+        close_iter = cv2.getTrackbarPos("Close_iter", win_name)
+        bb_open_iter = cv2.getTrackbarPos("BB_Open", win_name)
+        bb_close_iter = cv2.getTrackbarPos("BB_Close", win_name)
+        bb_erode_iter = cv2.getTrackbarPos("BB_Erode", win_name)
+        bb_dilate_iter = cv2.getTrackbarPos("BB_Dilate", win_name)
+        clahe_clip = cv2.getTrackbarPos("CLAHE_clip", win_name)
+        blk = cv2.getTrackbarPos("block_size", win_name)
+        if blk < 3: blk = 3
+        if blk % 2 == 0: blk += 1
 
         # 1) 빨강/파랑 제거 → 그레이스케일
         img_clean = remove_red_blue(img)
         gray = cv2.cvtColor(img_clean, cv2.COLOR_BGR2GRAY)
 
-        # 2) Gaussian Blur
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        # 2) BilateralFilter 적용
+        processed = cv2.bilateralFilter(gray, 9, 75, 75)
 
-        # 3) CLAHE
-        gray_clahe = apply_clahe(blurred, clipLimit=float(clahe_clip), tileGridSize=(8, 8))
+        # 3) CLAHE 적용
+        gray_clahe = apply_clahe(processed, clipLimit=clahe_clip)
 
-        # 4) AdaptiveThreshold + 반전
-        thr = cv2.adaptiveThreshold(
-            gray_clahe, 255,
-            cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,
-            blk, Cval
-        )
-        mask_inv = cv2.bitwise_not(thr)
+        # 4) Adaptive Thresholding / Otsu 선택
+        if use_otsu:
+            _, thr = cv2.threshold(
+                gray_clahe, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+            mask_inv = cv2.bitwise_not(thr)
+        else:
+            thr = cv2.adaptiveThreshold(
+                gray_clahe,
+                255,
+                cv2.ADAPTIVE_THRESH_MEAN_C,
+                cv2.THRESH_BINARY,
+                blk,
+                5
+            )
+            mask_inv = cv2.bitwise_not(thr)
 
         # 5) 작은 노이즈 컨투어 제거
         conts, _ = cv2.findContours(mask_inv, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -306,207 +263,178 @@ if __name__ == "__main__":
         mask_small_removed = cv2.bitwise_and(mask_inv, cv2.bitwise_not(small_mask))
 
         # 6) HoleDetector 기반 구멍 제거
-        mask_no_holes = remove_holes(mask_small_removed, img_clean, hole_radius=hole_r)
+        hole_detector = HoleDetector()
+        def remove_hole(mask, img, hole_radius):
+            centers = hole_detector.detect_holes_raw(img)
+            clean_mask = mask.copy()
+            H, W = clean_mask.shape[:2]
+            half = hole_radius
+            for cx, cy in centers:
+                x_int, y_int = int(round(cx)), int(round(cy))
+                x0 = max(x_int - half, 0)
+                y0 = max(y_int - half, 0)
+                x1 = min(x_int + half, W - 1)
+                y1 = min(y_int + half, W - 1)
+                cv2.rectangle(clean_mask, (x0, y0), (x1, y1), 0, -1)
+            return clean_mask
 
-        # 7) Closing (3×3 커널) + Dilation (끊어진 선 연결)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        closed = cv2.morphologyEx(mask_no_holes, cv2.MORPH_CLOSE, kernel, iterations=1)
-        connected = cv2.dilate(closed, kernel, iterations=1)
+        mask_no_holes = remove_hole(mask_small_removed, img_clean, hole_r)
 
-        # 8) Canny 엣지 (확인용)
-        edges = cv2.Canny(connected, canny1, canny2)
+        # 7) Morphological: Opening, Closing (반복 횟수 조정)
+        k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        opened = cv2.morphologyEx(mask_no_holes, cv2.MORPH_OPEN, k, iterations=open_iter)
+        closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, k, iterations=close_iter)
 
-        # 9) Skeleton + 엔드포인트 + 엔드포인트 클러스터링
-        skel, skel_eps = skeleton_and_endpoints(connected)
-        clustered_eps = cluster_endpoints(skel_eps, thresh=5)
-        skel_vis = cv2.cvtColor(skel, cv2.COLOR_GRAY2BGR)
-        for (x, y) in clustered_eps:
-            cv2.circle(skel_vis, (x, y), 4, (255, 0, 0), -1)
+        # 8) Dilation → Erosion
+        connected = cv2.dilate(closed, k, iterations=1)
+        processed_morph = cv2.erode(connected, k, iterations=1)
 
-        # 10) 컨투어 검출 → 직선 근사 후 끝점 & 파라미터 추출
-        line_vis = cv2.cvtColor(connected, cv2.COLOR_GRAY2BGR)
-        contours2, _ = cv2.findContours(connected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        raw_lines = []  # (p1, p2, (vx, vy, x0, y0), length, thickness)
-        for cnt in contours2:
-            res = fit_line_endpoints(cnt, w, h, min_length, min_thickness=lead_thickness_min, max_thickness=lead_thickness_max)
-            if res:
-                p1, p2, params, thickness = res
-                length = distance(p1, p2)
-                raw_lines.append((p1, p2, params, length, thickness))
+        # 9-A) 스켈레톤 기반 끝점 검출
+        skel_endpoints, skel_bin = get_skeleton_endpoints(processed_morph, enable_prune)
 
-        # 11) 기울기-위치 유사 선분 병합
-        merged_lines = []
-        used = [False] * len(raw_lines)
-        angle_thresh = 0.1  # 라디안 약 5.7도
-        dist_thresh = 5     # 픽셀 거리 기준
+        # 9-B) 은색/회색 마스크 기반 끝점 검출
+        gray_endpoints, mask_gray = get_gray_mask_endpoints(
+            img_clean,
+            sat_thresh=sat_thresh,
+            val_low=val_low,
+            val_high=val_high
+        )
 
-        def line_params_from_endpoints(p1, p2):
-            A = p2[1] - p1[1]
-            B = -(p2[0] - p1[0])
-            C = p2[0] * p1[1] - p2[1] * p1[0]
-            norm = np.hypot(A, B)
-            if norm == 0:
-                return A, B, C
-            return A / norm, B / norm, C / norm
+        # 10) LSD를 이용한 직선 검출 (raw) → 길이 10픽셀 이하 제거 → 필터된 선 시각화
+        raw_lsd_lines = lsd_detect_raw(gray)  # 모든 선분 좌표
+        filtered_lsd_lines = [
+            (x1, y1, x2, y2)
+            for (x1, y1, x2, y2) in raw_lsd_lines
+            if np.hypot(x2 - x1, y2 - y1) > 50  # 길이가 10 픽셀보다 큰 경우만 남김 (> 10)
+        ]
+        # 필터링된 선분만 img_clean 위에 그려서 보여줌
+        lsd_img = draw_lsd_lines(img_clean, filtered_lsd_lines)
 
-        for i, (p1_i, p2_i, line_i, _, _) in enumerate(raw_lines):
-            if used[i]:
-                continue
-            vx_i, vy_i, x0_i, y0_i = line_i
-            ang_i = np.arctan2(vy_i, vx_i)
-            group_points = [p1_i, p2_i]
-            used[i] = True
+        # === HoughLinesP로 직선 검출 (기존) ===
+        edges = cv2.Canny(processed_morph, canny1, canny2)
+        hough_lines = cv2.HoughLinesP(
+            edges, 1, np.pi / 180, threshold=50,
+            minLineLength=min_length, maxLineGap=5
+        )
 
-            A_i, B_i, C_i = line_params_from_endpoints(p1_i, p2_i)
-
-            for j in range(i + 1, len(raw_lines)):
-                if used[j]:
-                    continue
-                p1_j, p2_j, line_j, _, _ = raw_lines[j]
-                vx_j, vy_j, x0_j, y0_j = line_j
-                ang_j = np.arctan2(vy_j, vx_j)
-                if abs(ang_i - ang_j) < angle_thresh:
-                    d1 = abs(A_i * p1_j[0] + B_i * p1_j[1] + C_i)
-                    d2 = abs(A_i * p2_j[0] + B_i * p2_j[1] + C_i)
-                    if d1 < dist_thresh and d2 < dist_thresh:
-                        used[j] = True
-                        group_points.extend([p1_j, p2_j])
-
-            ref = np.array([x0_i, y0_i], dtype=np.float32)
-            dir_vec = np.array([vx_i, vy_i], dtype=np.float32)
-            ts = []
-            for (x, y) in group_points:
-                t = dir_vec.dot(np.array([x, y], dtype=np.float32) - ref)
-                ts.append((t, (x, y)))
-            t_min, p_min = min(ts, key=lambda x: x[0])
-            t_max, p_max = max(ts, key=lambda x: x[0])
-            merged_lines.append((p_min, p_max))
-
-        # 12) 검출된 merged_lines 중 가장 긴 선분들 순으로 정렬
-        merged_with_length = []
-        for (p1, p2) in merged_lines:
-            merged_with_length.append((p1, p2, distance(p1, p2)))
-        merged_with_length.sort(key=lambda x: x[2], reverse=True)
-
-        # --- Convex Hull 기반: 몸체 근처에서 뻗어나가는 선 끝점 2개 선택 (개선사항 1) ---
-        final_tips = []
-        if hull is not None and hull_centroid is not None:
-            # 리드가 hull 주변에서 시작하는 경우를 포함하여 검출
-            # 한 점이 hull 근처(일정 거리 이내)에 있고 다른 점이 멀리 있는 경우
-            candidate_tips = []
-            hull_proximity_threshold = hull_proximity  # 트랙바에서 조절 가능
-            
-            for (p1, p2, length) in merged_with_length:
-                d1 = cv2.pointPolygonTest(hull, p1, True)  # True로 실제 거리 계산
-                d2 = cv2.pointPolygonTest(hull, p2, True)
-                
-                # p1이 hull 근처(내부 포함)이고 p2가 멀리 있는 경우
-                if -hull_proximity_threshold <= d1 <= hull_proximity_threshold and d2 < -hull_proximity_threshold:
-                    # 더 멀리 있는 점을 tip으로, 가까운 점에서 centroid까지의 거리도 고려
-                    candidate_tips.append((p2, p1, length, distance(p2, hull_centroid)))
-                # p2가 hull 근처(내부 포함)이고 p1이 멀리 있는 경우
-                elif -hull_proximity_threshold <= d2 <= hull_proximity_threshold and d1 < -hull_proximity_threshold:
-                    candidate_tips.append((p1, p2, length, distance(p1, hull_centroid)))
-            
-            # 길이와 centroid로부터의 거리를 모두 고려하여 정렬
-            # 긴 리드이면서 끝점이 centroid로부터 먼 것을 우선시
-            candidate_tips.sort(key=lambda x: x[2] * 0.3 + x[3] * 0.7, reverse=True)
-            
-            # 각도 검증을 통해 유효한 쌍 찾기
-            if len(candidate_tips) >= 2:
-                # 첫 번째 tip 선택
-                final_tips.append(candidate_tips[0][0])
-                
-                # 두 번째 tip은 첫 번째와 적절한 각도를 이루는 것 선택
-                found_second = False
-                for i in range(1, len(candidate_tips)):
-                    if validate_lead_pair(final_tips[0], candidate_tips[i][0], hull_centroid):
-                        final_tips.append(candidate_tips[i][0])
-                        found_second = True
+        # 11) 후보 라인 필터링: 스켈레톤/그레이 끝점 근처에 있는 Hough 및 LSD 선분 합침
+        candidate_lines = []
+        # Hough 기반 선분
+        if hough_lines is not None:
+            for l in hough_lines:
+                x1, y1, x2, y2 = l[0]
+                p1 = (int(x1), int(y1))
+                p2 = (int(x2), int(y2))
+                keep = False
+                for (sx, sy) in skel_endpoints + gray_endpoints:
+                    if distance(p1, (sx, sy)) <= match_dist_thresh or \
+                       distance(p2, (sx, sy)) <= match_dist_thresh:
+                        keep = True
                         break
-                
-                # 각도 조건을 만족하는 두 번째 리드가 없으면, 가장 좋은 후보를 선택
-                if not found_second and len(candidate_tips) >= 2:
-                    # 첫 번째와 가장 각도가 큰 것을 선택
-                    best_angle = 0
-                    best_idx = 1
-                    for i in range(1, min(len(candidate_tips), 5)):
-                        angle = calculate_angle_between_leads(final_tips[0], candidate_tips[i][0], hull_centroid)
-                        if angle > best_angle:
-                            best_angle = angle
-                            best_idx = i
-                    if best_angle > 60:  # 최소 60도 이상이면 선택
-                        final_tips.append(candidate_tips[best_idx][0])
-                        
-            elif len(candidate_tips) == 1:
+                if keep:
+                    candidate_lines.append((p1, p2))
+        # LSD 기반 선분 (필터된 것만)
+        for (x1, y1, x2, y2) in filtered_lsd_lines:
+            p1 = (x1, y1)
+            p2 = (x2, y2)
+            keep = False
+            for (sx, sy) in skel_endpoints + gray_endpoints:
+                if distance(p1, (sx, sy)) <= match_dist_thresh or \
+                   distance(p2, (sx, sy)) <= match_dist_thresh:
+                    keep = True
+                    break
+            if keep:
+                candidate_lines.append((p1, p2))
+
+        merged_lines = candidate_lines  # 병합 없이 단순 합침
+
+        # 12) Convex Hull 기반 최종 리드 끝점 후보 선택
+        final_tips = []
+        mask_body = cv2.bitwise_or(
+            cv2.bitwise_or(
+                cv2.inRange(hsv_full, r1_low, r1_high),
+                cv2.inRange(hsv_full, r2_low, r2_high)
+            ),
+            cv2.bitwise_or(
+                cv2.inRange(hsv_full, g_low, g_high),
+                cv2.inRange(hsv_full, y_low, y_high)
+            )
+        )
+        kernel_body = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        open_body_iter = 2
+        close_body_iter = 2
+        dilate_body_iter = 2
+        mask_body_clean = cv2.morphologyEx(mask_body, cv2.MORPH_OPEN, kernel_body, iterations=open_body_iter)
+        mask_body_clean = cv2.morphologyEx(mask_body_clean, cv2.MORPH_CLOSE, kernel_body, iterations=close_body_iter)
+        mask_body_clean = cv2.dilate(mask_body_clean, kernel_body, iterations=dilate_body_iter)
+        conts_body, _ = cv2.findContours(mask_body_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        hull = None
+        hull_centroid = None
+        if conts_body:
+            largest_cont = max(conts_body, key=lambda c: cv2.contourArea(c))
+            hull = cv2.convexHull(largest_cont)
+            M = cv2.moments(hull)
+            if M["m00"] != 0:
+                hull_centroid = (M["m10"] / M["m00"], M["m01"] / M["m00"])
+
+        if hull is not None and hull_centroid is not None:
+            candidate_tips = []
+            for (p1, p2) in merged_lines:
+                d1 = cv2.pointPolygonTest(hull, p1, True)
+                d2 = cv2.pointPolygonTest(hull, p2, True)
+                if -hull_proximity <= d1 <= hull_proximity and d2 < -hull_proximity:
+                    candidate_tips.append((p2, p1, distance(p2, hull_centroid)))
+                elif -hull_proximity <= d2 <= hull_proximity and d1 < -hull_proximity:
+                    candidate_tips.append((p1, p2, distance(p1, hull_centroid)))
+            candidate_tips.sort(key=lambda x: x[2], reverse=True)
+            if len(candidate_tips) >= 2:
                 final_tips.append(candidate_tips[0][0])
+                for i in range(1, len(candidate_tips)):
+                    if distance(final_tips[0], candidate_tips[i][0]) <= match_dist_thresh:
+                        final_tips.append(candidate_tips[i][0])
 
-        # --- 시각화: 스켈레톤 엔드포인트, 원본 합쳐진 선분, convex hull, 선택된 두 점 ---
-        # 스켈레톤 + 클러스터링된 엔드포인트
-        skel_vis = cv2.cvtColor(skel, cv2.COLOR_GRAY2BGR)
-        for (x, y) in clustered_eps:
-            cv2.circle(skel_vis, (x, y), 4, (255, 0, 0), -1)
+        # --- 시각화 ---
+        # 회색 마스크 + 끝점
+        gray_display = cv2.cvtColor(mask_gray, cv2.COLOR_GRAY2BGR)
+        for (x, y) in gray_endpoints:
+            cv2.circle(gray_display, (x, y), 3, (0, 255, 0), -1)
+        cv2.imshow("Gray Mask + Endpoints", gray_display)
 
-        # 라인 시각화
-        line_vis = cv2.cvtColor(connected, cv2.COLOR_GRAY2BGR)
-        # 모든 병합 라인(연한 회색)
+        # 스켈레톤 이진 영상
+        cv2.imshow("Skeleton Binary", (skel_bin * 255).astype(np.uint8))
+        # 스켈레톤 + 끝점
+        skel_display = cv2.cvtColor((skel_bin * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+        for (x, y) in skel_endpoints:
+            cv2.circle(skel_display, (x, y), 3, (255, 0, 0), -1)
+        cv2.imshow("Skeleton + Endpoints", skel_display)
+
+        # **필터된 LSD 선분만 그려진 이미지**를 보여줍니다.
+        cv2.imshow("LSD Lines (Filtered >10px)", lsd_img)
+
+        # 최종 시각화: 합쳐진 선분 + 최종 끝점
+        vis_final = cv2.cvtColor(processed_morph, cv2.COLOR_GRAY2BGR)
         for (p1, p2) in merged_lines:
-            cv2.line(line_vis, p1, p2, (200, 200, 200), 1)
-        
-        # 후보 리드들 시각화 (파란색) - 디버깅용
-        if 'candidate_tips' in locals():
-            for i, (tip, base, _, _) in enumerate(candidate_tips[:5]):  # 상위 5개만
-                cv2.line(line_vis, base, tip, (255, 100, 0), 2)
-                cv2.putText(line_vis, str(i+1), tip, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 0), 1)
-        
-        # convex hull (초록)
-        if hull is not None:
-            cv2.drawContours(line_vis, [hull], -1, (0, 255, 0), 2)
-        # 선택된 최종 두 점 (노랑)
+            cv2.line(vis_final, p1, p2, (0, 255, 0), 1)
         for (x, y) in final_tips:
-            cv2.circle(line_vis, (x, y), 7, (0, 255, 255), -1)
+            cv2.circle(vis_final, (x, y), 7, (0, 255, 255), -1)
 
-        # --- 전체 시각화: 2×4 타일 ---
         def to_bgr(x):
             return x if len(x.shape) == 3 else cv2.cvtColor(x, cv2.COLOR_GRAY2BGR)
 
         resize_size = (w // 2, h // 2)
         imgs = [
-            to_bgr(img),                # 1. Original
-            to_bgr(gray),               # 2. Gray
-            to_bgr(blurred),            # 3. Blurred
-            to_bgr(gray_clahe),         # 4. CLAHE
-            to_bgr(mask_inv),           # 5. Thresh Inv
-            to_bgr(mask_small_removed), # 6. Small Removed
-            to_bgr(skel_vis),           # 7. Skeleton + Clustered Endpoints
-            to_bgr(line_vis)            # 8. Lines + Hull + Final Tips
+            to_bgr(img),          # 원본
+            to_bgr(gray_display), # 회색 마스크 + 끝점
+            to_bgr(skel_display), # 스켈레톤 + 끝점
+            to_bgr(vis_final)     # LSD+Hough 기반 합쳐진 선분 + 최종 끝점
         ]
         tiles = [cv2.resize(v, resize_size) for v in imgs]
-        top_row = np.hstack(tiles[0:4])
-        bot_row = np.hstack(tiles[4:8])
-        canvas = np.vstack((top_row, bot_row))
+        top_row = np.hstack(tiles[0:2])
+        bottom_row = np.hstack(tiles[2:4])
+        grid = np.vstack((top_row, bottom_row))
+        cv2.imshow("2x2 Grid", grid)
 
-        # --- 디버깅 정보 추가 (개선사항 7) ---
-        info_text = f"Image: {image_files[idx]}"
-        info_text += f" | Candidates: {len(candidate_tips) if 'candidate_tips' in locals() else 0}"
-        if final_tips:
-            info_text += f" | Leads found: {len(final_tips)}"
-            if len(final_tips) == 2:
-                angle = calculate_angle_between_leads(final_tips[0], final_tips[1], hull_centroid)
-                info_text += f" | Angle: {angle:.1f} deg"
-            elif len(final_tips) == 1 and 'candidate_tips' in locals() and len(candidate_tips) > 1:
-                # 두 번째 리드를 찾지 못한 이유 표시
-                info_text += " | 2nd lead angle mismatch"
-        
-        # 정보 텍스트 배경 추가
-        text_size = cv2.getTextSize(info_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
-        cv2.rectangle(canvas, (5, canvas.shape[0] - 35), (15 + text_size[0], canvas.shape[0] - 5), (0, 0, 0), -1)
-        cv2.putText(canvas, info_text, (10, canvas.shape[0] - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-        cv2.imshow(win_name, canvas)
-
-        key = cv2.waitKey(50) & 0xFF
+        key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
         elif key == ord('n'):
@@ -517,29 +445,7 @@ if __name__ == "__main__":
             else:
                 h, w = img.shape[:2]
                 cv2.resizeWindow(win_name, w * 2, h * 2)
-                # 새로운 이미지가 로드될 때마다 hull 정보도 갱신
                 hsv_full = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-                mask_red = cv2.bitwise_or(
-                    cv2.inRange(hsv_full, r1_low, r1_high),
-                    cv2.inRange(hsv_full, r2_low, r2_high)
-                )
-                mask_green = cv2.inRange(hsv_full, g_low, g_high)
-                mask_yellow = cv2.inRange(hsv_full, y_low, y_high)
-                mask_body = cv2.bitwise_or(cv2.bitwise_or(mask_red, mask_green), mask_yellow)
-                mask_body_clean = cv2.morphologyEx(mask_body, cv2.MORPH_OPEN, kernel_body, iterations=2)
-                mask_body_clean = cv2.morphologyEx(mask_body_clean, cv2.MORPH_CLOSE, kernel_body, iterations=2)
-                conts_body, _ = cv2.findContours(mask_body_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                if conts_body:
-                    largest_cont = max(conts_body, key=lambda c: cv2.contourArea(c))
-                    hull = cv2.convexHull(largest_cont)
-                    M = cv2.moments(hull)
-                    if M["m00"] != 0:
-                        hull_centroid = (M["m10"] / M["m00"], M["m01"] / M["m00"])
-                    else:
-                        hull_centroid = None
-                else:
-                    hull = None
-                    hull_centroid = None
-            continue
-
+                # HSV 범위 재설정
+                # (여기서는 그대로 두되, 필요시 트랙바를 통해 수정 가능)
     cv2.destroyAllWindows()
