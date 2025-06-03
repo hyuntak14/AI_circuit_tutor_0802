@@ -196,13 +196,32 @@ class ErrorChecker:
             seen.add(key)
         return errors
 
+    def detect_dangling_branches(self):
+        """
+        한쪽 끝만 다른 넷에 연결되고, 다른 끝은 그 넷에 단 하나만 물려 있어
+        결과적으로 회로 루프(전원 ↔ 접지) 상에 있지 않은 컴포넌트를 검출
+        """
+        errors = []
+        # self.nets: {net_id: [component_name, …], …}
+        for comp in self.components:
+            n1, n2 = comp['nodes']
+            # “n1” 쪽 넷에 이 컴포넌트만 연결되어 있고
+            # “n2”는 다른 컴포넌트(혹은 전원/접지)와 연결되어 있을 때 → 부동 분기
+            only_n1 = (len(self.nets.get(n1, [])) == 1)
+            only_n2 = (len(self.nets.get(n2, [])) == 1)
+            # 한쪽만 “len==1”이고, 다른 쪽 넷에는 전원 혹은 그 외 소자가 연결되어 있으면
+            if only_n1 and not only_n2:
+                errors.append(f"Dangling branch: component {comp['name']} has a floating node at {n1}")
+            elif only_n2 and not only_n1:
+                errors.append(f"Dangling branch: component {comp['name']} has a floating node at {n2}")
+        return errors
+
     def run_all_checks(self):
-        """모든 오류 검출 실행"""
         checks = [
             self.detect_open_circuit,
             self.detect_short_circuit,
             self.detect_floating_components,
-            #self.detect_orphan_components,
+            #self.detect_orphan_components,  # 현재는 주석 처리 상태
             self.detect_self_loops,
             self.detect_mult_voltage_sources,
             self.detect_polarity_errors,
@@ -213,6 +232,7 @@ class ErrorChecker:
             self.detect_missing_voltage_source,
             self.detect_no_ground_reference,
             self.detect_duplicate_connections,
+            self.detect_dangling_branches,   # 새로 추가
         ]
         errors = []
         for fn in checks:

@@ -6,7 +6,7 @@
 <graph edgedefault="undirected"><node id="R1">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">185,180</data>
+  <data key="d2">443,180</data>
 </node>
 <node id="R2">
   <data key="d0">Resistor</data>
@@ -21,8 +21,11 @@
 <node id="V1">
   <data key="d0">VoltageSource</data>
   <data key="d1">5.0</data>
-  <data key="d2">184,176</data>
+  <data key="d2">443,176</data>
 </node>
+<edge source="R1" target="V1">
+  <data key="d3">443</data>
+</edge>
 <edge source="R1" target="R2">
   <data key="d3">180</data>
 </edge>

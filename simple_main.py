@@ -149,7 +149,6 @@ class SimpleCircuitConverter:
             print("generated files:")
             print("  - circuit.jpg")
             print("  - circuit.spice")
-
 if __name__ == "__main__":
     converter = SimpleCircuitConverter()
     converter.run()

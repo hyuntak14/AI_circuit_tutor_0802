@@ -213,7 +213,7 @@ def generate_circuit(
         # ✅ 연결성 검증 추가
         
         
-        '''connectivity_report = validate_circuit_connectivity(G)
+        connectivity_report = validate_circuit_connectivity(G)
         
         if not connectivity_report['is_connected']:
             print(f"\n🚨 전원 {i} 회로 연결성 문제:")
@@ -224,7 +224,7 @@ def generate_circuit(
             print("연결된 그룹:")
             for j, group in enumerate(connectivity_report['groups']):
                 comp_names = [comp['name'] for comp in group]
-                print(f"  그룹 {j+1}: {comp_names}")'''
+                print(f"  그룹 {j+1}: {comp_names}")
         
         # ✅ 연결 그래프: 연결성 정보 포함 (import 오류 해결)
         try:
@@ -246,12 +246,19 @@ def generate_circuit(
             # GUI 관련 오류를 피하기 위해 try-except로 감싸기
             try:
                 from diagram import drawDiagramFromGraph_with_connectivity_check
+                print("graph creating...")
+                # power_pairs 리스트를 G.graph에 저장 (리스트로 확장 가능)
+                existing = G.graph.get('power_pairs', [])
+                existing.append((net_p, x_p, net_m, x_m))
+                G.graph['power_pairs'] = existing
+                # 이전 plus_x, minus_x 단일값은 더 이상 쓰지 않음
                 d = drawDiagramFromGraph_with_connectivity_check(G, voltage)
+                print("graph creating222...")
             except Exception as gui_error:
                 # GUI 오류가 발생하면 기본 다이어그램 생성 시도
                 print(f"GUI 오류로 기본 다이어그램 생성 시도: {gui_error}")
-                from diagram import drawDiagramFromGraph
-                d = drawDiagramFromGraph(G, voltage)
+                from diagram import drawDiagramFromGraph_fixed
+                d = drawDiagramFromGraph_fixed(G, voltage)
             
             if d:
                 try:

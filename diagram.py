@@ -1103,7 +1103,6 @@ def analyze_circuit_topology_improved(G):
     
     return all_circuit_levels, is_connected
 
-
 def drawDiagramFromGraph_with_connectivity_check(G, voltage=5.0):
     """
     연결 상태를 확인하여 끊어진 회로는 별도로 표시하는 개선된 함수
@@ -1118,87 +1117,107 @@ def drawDiagramFromGraph_with_connectivity_check(G, voltage=5.0):
     # 2) 연결되지 않은 경우 경고 메시지와 함께 부분 회로도 생성
     if not is_connected:
         print("⚠️  주의: 연결되지 않은 회로 요소들이 있습니다. 연결된 부분만 그립니다.")
-        
-        # 각 연결된 그룹별로 별도 다이어그램 생성 가능
-        # 또는 모든 그룹을 하나의 다이어그램에 표시 (점선으로 구분)
+        # (추가 로직: 끊어진 회로 표시 등)
     
     # 3) 회로도 그리기
-    return drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connected)
+    """
+    * power_pairs 리스트가 G.graph['power_pairs']에 저장되어 있다고 가정
+      power_pairs = [(net_p, x_p, net_m, x_m), (net_p2, x_p2, net_m2, x_m2), ...]
+    """
+    power_pairs = G.graph.get('power_pairs', [])
+    # [(x_p, x_m), (x_p2, x_m2), ...] 형태로 가공
+    power_positions = [(x_p, x_m) for (_, x_p, _, x_m) in power_pairs]
+    return drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connected, power_positions)
 
 
-def drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connected):
+
+def drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connected, power_positions):
     """
     연결 끊김을 시각적으로 표시하는 회로도 그리기
+    power_positions: [(x_plus1, x_minus1), (x_plus2, x_minus2), ...]
     """
     import schemdraw
     import schemdraw.elements as e
-    
+
+    # 1) 기본 Drawing 초기화
     d = schemdraw.Drawing()
-    d.config(unit=3.0)  # 기본 단위 크기를 3배로 확대
-    d.config(fontsize=14)  # 폰트 크기도 키우기
-    
-    d.push()
-    # 연결되지 않은 경우 제목에 경고 표시
+    d.config(unit=3.0)      # 기본 단위 크기를 3배로
+    d.config(fontsize=14)   # 폰트 크기도 키우기
+
+    # 2) 연결 끊김 경고 (is_connected==False 경우)
     if not is_connected:
         d += e.Label().label("⚠️ DISCONNECTED CIRCUIT ⚠️").color('red').at((0, 1))
-    
+
     d.push()
-    
-    components = []
-    
+
+    # 3) 각 레벨(level)에 따라 직렬/병렬 컴포넌트 그리기
     for level_idx, level in enumerate(circuit_levels):
         level_size = len(level)
-        
-        # 연결 끊김을 나타내는 특별한 처리
-        if level_idx > 0 and not is_connected:
-            # 점선으로 끊어진 연결 표시
-            d += e.Line().linestyle('--').color('red').length(1)
-            d += e.Label().label("BREAK").color('red').fontsize(8)
-        
-        # 기존 레벨 그리기 로직
+
+        # (3-1) 직렬 레벨 (하나만 있는 경우)
         if level_size == 1:
             comp = level[0]
             element = get_component_element(comp)
             d += element
-            
+
+        # (3-2) 병렬 레벨 (정확히 2개일 때만 예시)
         elif level_size == 2:
-            # 병렬 2개
-            d += e.Line().right(d.unit/4)
+            # (a) 수평으로 약간 이동
+            d += e.Line().right(d.unit/3)
             d.push()
-            
-            # 위쪽
+
+            # (b) 위쪽 브랜치
             d += e.Line().up(d.unit/2)
             element1 = get_component_element(level[0])
             d += element1
             d += e.Line().down(d.unit/2)
             d.pop()
-            
-            # 아래쪽  
+
+            # (c) 아래쪽 브랜치
             d += e.Line().down(d.unit/2)
             element2 = get_component_element(level[1])
             d += element2
             d += e.Line().up(d.unit/2)
-            
-            d += e.Line().right(d.unit/4)
-            
-        # ... (기타 병렬 조합 처리)
-    
-    # 전원 연결 (연결된 경우만)
-    if is_connected:
-        d += (n1 := e.Dot())
-        d += e.Line().down().at(n1.end)
-        d += (n2 := e.Dot())
-        d.pop()
-        d += (n3 := e.Dot())
-        d += e.SourceV().down().label(f"{voltage}V").at(n3.end).reverse()
-        d += (n4 := e.Dot())
-        d += e.Line().right().endpoints(n4.end, n2.end)
-    else:
-        # 연결되지 않은 경우 전원을 별도로 표시하거나 생략
-        d += e.Label().label("전원 연결 불가 - 회로 끊어짐").color('red')
-    
-    return d
 
+            # (d) 병렬 블록 끝에서 오른쪽으로 이동
+            d += e.Line().right(d.unit/3)
+
+        # (3-3) 2개 초과 병렬 레벨 처리 (필요 시 확장)
+        else:
+            # 단순히 순차적으로 나열 (더 복잡한 병렬 배치가 필요하면 이 부분을 확장)
+            for comp in level:
+                elem = get_component_element(comp)
+                d += elem
+
+    # 4) 전원 연결 그리기 (is_connected일 때만)
+    if is_connected:
+        for idx, (x_p, x_m) in enumerate(power_positions):
+            # (a) 전원 심볼 배치 기준점
+            d += (n1 := e.Dot())
+            d += e.Line().down().at(n1.end)
+            d += (n2 := e.Dot())
+            d.pop()
+            d += (n3 := e.Dot())
+
+            # (b) plus/minus 좌우 위치 비교 → 방향 결정
+            if x_p < x_m:
+                # plus가 왼쪽(작은 x), minus가 오른쪽(큰 x)
+                d += e.SourceV().down().label(f"V{idx+1}\n{voltage}V").at(n3.end)
+            else:
+                # minus가 왼쪽, plus가 오른쪽 → reversed
+                d += e.SourceV().down().label(f"V{idx+1}\n{voltage}V").at(n3.end).reverse()
+
+            d += (n4 := e.Dot())
+            d += e.Line().right().endpoints(n4.end, n2.end)
+
+            # (c) 만약 다음 전원을 좀 위/아래나 더 오른쪽으로 분리하고 싶다면,
+            #     예를 들어 d += e.Line().up(d.unit/2) 같이 추가 가능
+
+    else:
+        # 연결 안 된 경우 전원 대신 경고만 출력
+        d += e.Label().label("전원 연결 불가 - 회로 끊어짐").color('red')
+
+    return d
 
 def validate_circuit_connectivity(G):
     """
