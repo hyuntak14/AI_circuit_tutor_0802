@@ -6,39 +6,33 @@
 <graph edgedefault="undirected"><node id="R1">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">443,180</data>
+  <data key="d2">174,169</data>
 </node>
 <node id="R2">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">180,176</data>
+  <data key="d2">6,174</data>
 </node>
 <node id="R3">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">180,176</data>
+  <data key="d2">169,167</data>
 </node>
 <node id="V1">
   <data key="d0">VoltageSource</data>
   <data key="d1">5.0</data>
-  <data key="d2">443,176</data>
+  <data key="d2">6,167</data>
 </node>
-<edge source="R1" target="V1">
-  <data key="d3">443</data>
-</edge>
 <edge source="R1" target="R2">
-  <data key="d3">180</data>
+  <data key="d3">174</data>
 </edge>
 <edge source="R1" target="R3">
-  <data key="d3">180</data>
-</edge>
-<edge source="R2" target="R3">
-  <data key="d3">180,176</data>
+  <data key="d3">169</data>
 </edge>
 <edge source="R2" target="V1">
-  <data key="d3">176</data>
+  <data key="d3">6</data>
 </edge>
 <edge source="R3" target="V1">
-  <data key="d3">176</data>
+  <data key="d3">167</data>
 </edge>
 </graph></graphml>

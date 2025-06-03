@@ -1,4 +1,4 @@
-# main.py (간소화된 버전) - 수정된 버전
+# main.py (간소화된 버전) - 다중 전원 지원 수정된 버전
 import os
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -106,9 +106,9 @@ class SimpleCircuitConverter:
         return warped, bb  # 원본 bounding box도 반환
 
     def run(self):
-        """전체 프로세스 실행"""
+        """전체 프로세스 실행 - 다중 전원 지원"""
         print("=" * 50)
-        print("🔌 간소화된 브레드보드 → 회로도 변환기")
+        print("🔌 간소화된 브레드보드 → 회로도 변환기 (다중 전원 지원)")
         print("=" * 50)
         
         # 1. 이미지 로드
@@ -138,17 +138,45 @@ class SimpleCircuitConverter:
         # 6. 값 입력 (CircuitGeneratorManager 사용)
         self.circuit_generator.quick_value_input(component_pins)
         
-        # 7. 전원 선택 (CircuitGeneratorManager 사용)
-        voltage, plus_pt, minus_pt = self.circuit_generator.quick_power_selection(warped, component_pins)
+        # 7. 다중 전원 선택 (수정된 CircuitGeneratorManager 사용)
+        print("\n🔋 전원 설정 단계")
+        power_sources = self.circuit_generator.quick_power_selection(warped, component_pins)
         
-        # 8. 회로 생성 (CircuitGeneratorManager 사용)
-        success = self.circuit_generator.generate_final_circuit(component_pins, holes, voltage, plus_pt, minus_pt, warped)
+        if not power_sources:
+            print("❌ 전원이 설정되지 않았습니다.")
+            return
+        
+        # 전원 정보 출력
+        print(f"\n📊 설정된 전원 정보:")
+        for i, (voltage, plus_pt, minus_pt) in enumerate(power_sources, 1):
+            print(f"  전원 {i}: {voltage}V, 양극 {plus_pt}, 음극 {minus_pt}")
+        
+        # 8. 회로 생성 (수정된 CircuitGeneratorManager 사용)
+        print("\n🔧 회로도 생성 단계")
+        success = self.circuit_generator.generate_final_circuit(
+            component_pins, holes, power_sources, warped
+        )
         
         if success:
-            print("\n🎉 변환 완료!")
-            print("generated files:")
-            print("  - circuit.jpg")
-            print("  - circuit.spice")
+            print("\n🎉 다중 전원 회로 변환 완료!")
+            print("📁 생성된 파일:")
+            print("  - circuit.jpg (메인 회로도)")
+            print("  - circuit.spice (SPICE 넷리스트)")
+            
+            # 다중 전원에 따른 추가 파일들 안내
+            if len(power_sources) > 1:
+                print("  - 추가 전원별 회로도:")
+                for i in range(2, len(power_sources) + 1):
+                    print(f"    - circuit_pwr{i}.jpg")
+            
+            # 연결성 그래프 파일도 안내
+            print("  - circuit_graph.png (연결성 그래프)")
+            print("  - circuit.graphml (그래프 데이터)")
+            
+            print(f"\n✨ 총 {len(power_sources)}개의 전원을 가진 회로가 성공적으로 생성되었습니다!")
+        else:
+            print("\n❌ 회로 생성에 실패했습니다.")
+
 if __name__ == "__main__":
     converter = SimpleCircuitConverter()
     converter.run()

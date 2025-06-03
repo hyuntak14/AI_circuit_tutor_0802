@@ -24,7 +24,7 @@ from new_diagram import draw_new_diagram
 
 # 실습 주제 맵
 topic_map = {
-    0: "test용 회로", 1: "병렬회로", 2: "직렬회로", 3: "키르히호프 2법칙", 4: "키르히호프 2법칙",
+    0: "test용 회로", 1: "병렬회로", 2: "직렬회로", 3: "키르히호프 1법칙", 4: "키르히호프 2법칙",
     5: "중첩의 원리", 6: "오실로스코프 실습1", 7: "오실로스코프 실습2",
     8: "반파정류회로", 9: "반파정류회로2", 10: "비반전 증폭기"
 }
@@ -63,11 +63,12 @@ def compare_and_notify(G, output_img, checker_dir="checker"):
     messagebox.showinfo("회로 비교 결과", msg)
     root.destroy()
 
+# circuit_generator.py의 generate_circuit 함수 부분 수정
 def generate_circuit(
     all_comps: list,
     holes: list,
     wires: list,
-    voltage: float,
+    voltage: float,  # 대표 전압 (첫 번째 전원)
     output_spice: str,
     output_img: str,
     hole_to_net: dict,
@@ -129,22 +130,24 @@ def generate_circuit(
     for comp in mapped:
         print(f"{comp['name']} ({comp['class']}): Net1={comp['nodes'][0]}, Net2={comp['nodes'][1]}")
 
-     # 🔧 4) 전원 소스 추가 (이 부분이 누락되어 있었음!)
-    print("=== Adding Power Sources ===")
+    # 🔧 4) 다중 전원 소스 추가 (수정된 부분)
+    print("=== Adding Multiple Power Sources ===")
     for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs, start=1):
         vs_name = f"V{i}"
+        
+        # 각 전원마다 개별 전압 설정 가능하도록 확장
+        # 현재는 대표 전압(voltage)을 모든 전원에 적용
+        # 필요시 power_pairs에 전압 정보도 포함하도록 확장 가능
         vs_comp = {
             'name': vs_name,
             'class': 'VoltageSource',
-            'value': voltage,
+            'value': voltage,  # 향후 개별 전압으로 확장 가능
             'nodes': (net_p, net_m)
         }
         mapped.append(vs_comp)
         print(f"{vs_name} (VoltageSource): Net1={net_p}, Net2={net_m}, Value={voltage}V")
 
-
-
-    # 4) DataFrame 구성
+    # 5) DataFrame 구성
     df = pd.DataFrame([{
         'name': m['name'],
         'class': m['class'],
@@ -153,66 +156,22 @@ def generate_circuit(
         'node2_n': m['nodes'][1],
     } for m in mapped])
 
-    # 5) 그래프 저장
+    # 6) 그래프 저장
     G = build_circuit_graph(mapped)
     save_circuit_graph(G, output_img.replace('.jpg', '.graphml'))
     write_graphml(G, output_img.replace('.jpg', '.graphml'))
 
+    # 7) SPICE 저장 (다중 전원 지원)
+    toSPICE_multi_power(df, power_pairs, voltage, output_spice)
 
-
-
-    #기존 비교 (최종 점수만 출력)
-    '''try:
-        import glob
-        graphml_dir = "checker"
-        files = glob.glob(os.path.join(graphml_dir, "*.graphml"))
-        if files:
-            
-            sims = []
-            for f in files:
-                try:
-                    G2 = nx.read_graphml(f)
-                    sim = CircuitComparer(G, G2).compute_similarity()
-                    sims.append((os.path.basename(f), sim))
-                except Exception as e:
-                    print(f"[비교 실패] {f}: {e}")
-            sims.sort(key=lambda x: -x[1])
-            print("\n[유사도 TOP 3 회로]")
-            for i, (f, score) in enumerate(sims[:3]):
-                print(f"{i+1}. {f} → 유사도: {score:.3f}")
-        else:
-            print("[비교] 비교 대상 .graphml 없음")
-    except Exception as e:
-        print(f"[오류] 회로 비교 실패: {e}")'''
-
-    # 7) SPICE 저장
-    toSPICE(df, voltage, output_spice)
-
-    # SPICE 파일로부터 schemdraw 다이어그램 생성
-    #spice_diagram = output_img.replace('.jpg', '_new_spice.jpg')
-    #draw_new_diagram(output_spice, spice_diagram)
-
-
-    # 7-1) SPICE 기반 회로도 생성 옵션
-    '''try:
-        # SPICE 파일이 생성되었으면 SPICE 기반으로도 회로도 생성
-        spice_based_path = output_img.replace('.jpg', '_spice_based.jpg')
-        generate_circuit_from_spice(output_spice, spice_based_path)
-        print(f"✅ SPICE 기반 회로도 추가 생성: {spice_based_path}")
-    except Exception as e:
-        print(f"SPICE 기반 회로도 생성 실패: {e}")'''
-
-    # 8) 전원별 회로도 및 연결 그래프 시각화
+    # 8) 각 전원별 회로도 및 연결 그래프 시각화 (다중 전원 지원)
     for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs, 1):
-        #path = output_img.replace('.jpg', f'_pwr{i}.jpg')
         if i == 1:
             path = output_img
         else:
             path = output_img.replace('.jpg', f'_pwr{i}.jpg')
         
         # ✅ 연결성 검증 추가
-        
-        
         connectivity_report = validate_circuit_connectivity(G)
         
         if not connectivity_report['is_connected']:
@@ -226,53 +185,27 @@ def generate_circuit(
                 comp_names = [comp['name'] for comp in group]
                 print(f"  그룹 {j+1}: {comp_names}")
         
-        # ✅ 연결 그래프: 연결성 정보 포함 (import 오류 해결)
+        # ✅ 연결 그래프 생성
         try:
-            # import 오류를 피하기 위해 조건부 import 사용
-            try:
-                #from diagram import draw_connectivity_graph_from_nx_with_issues
-                draw_connectivity_graph_from_nx_with_issues(G, connectivity_report, 
-                                                           output_path=path.replace('.jpg', '_graph.png'))
-            except ImportError:
-                # 함수가 없으면 기본 연결 그래프 함수 사용
-                from diagram import draw_connectivity_graph_from_nx
-                draw_connectivity_graph_from_nx(G, output_path=path.replace('.jpg', '_graph.png'))
-                print(f"✅ 기본 연결성 그래프 저장: {path.replace('.jpg', '_graph.png')}")
+            from diagram import draw_connectivity_graph_from_nx
+            draw_connectivity_graph_from_nx(G, output_path=path.replace('.jpg', '_graph.png'))
         except Exception as e:
-            print(f"Failed to generate connectivity graph: {e}")
+            print(f"연결성 그래프 생성 실패 (전원 {i}): {e}")
         
-        # ✅ 회로도: 연결성 확인하여 생성 (GUI 오류 해결)
+        # ✅ 회로도 생성 (다중 전원 지원)
         try:
-            # GUI 관련 오류를 피하기 위해 try-except로 감싸기
-            try:
-                from diagram import drawDiagramFromGraph_with_connectivity_check
-                print("graph creating...")
-                # power_pairs 리스트를 G.graph에 저장 (리스트로 확장 가능)
-                existing = G.graph.get('power_pairs', [])
-                existing.append((net_p, x_p, net_m, x_m))
-                G.graph['power_pairs'] = existing
-                # 이전 plus_x, minus_x 단일값은 더 이상 쓰지 않음
-                d = drawDiagramFromGraph_with_connectivity_check(G, voltage)
-                print("graph creating222...")
-            except Exception as gui_error:
-                # GUI 오류가 발생하면 기본 다이어그램 생성 시도
-                print(f"GUI 오류로 기본 다이어그램 생성 시도: {gui_error}")
-                from diagram import drawDiagramFromGraph_fixed
-                d = drawDiagramFromGraph_fixed(G, voltage)
+            from diagram import drawDiagramFromGraph_with_connectivity_check
+            print(f"전원 {i} 회로도 생성 중...")
+            
+            # power_pairs 리스트를 G.graph에 저장
+            G.graph['power_pairs'] = power_pairs
+            G.graph['current_power_index'] = i - 1  # 현재 그리는 전원의 인덱스
+            
+            d = drawDiagramFromGraph_with_connectivity_check(G, voltage)
             
             if d:
                 try:
-                    # 다이어그램 그리기 및 저장 (GUI 오류 방지)
-                    
-                    import matplotlib
-                    matplotlib.use('TkAgg')  # GUI 백엔드 사용 안함
-                    
-                    
-                    
                     d.draw()
-                    
-                    
-                    
                     d.save(path)
                     
                     # 연결성 문제가 있으면 파일명에 표시
@@ -281,75 +214,69 @@ def generate_circuit(
                         d.save(disconnected_path)
                         print(f"⚠️  연결 끊어진 회로도 저장: {disconnected_path}")
                     else:
-                        print(f"✅ 정상 회로도 저장: {path}")
+                        print(f"✅ 전원 {i} 회로도 저장: {path}")
                     
-                    # OpenCV 버전 저장 (메인 스레드 오류 방지)
-                    try:
-                        from diagram import render_drawing_to_cv2
-                        img_cv = render_drawing_to_cv2(d)
-                        import cv2
-                        cv2.imwrite(path.replace('.jpg', '_cv.jpg'), img_cv)
-                    except Exception as cv_error:
-                        print(f"Warning: OpenCV 버전 저장 실패: {cv_error}")
-                        
                 except Exception as save_error:
-                    print(f"다이어그램 저장 실패: {save_error}")
+                    print(f"전원 {i} 회로도 저장 실패: {save_error}")
             else:
-                print(f"❌ 회로도 생성 실패 (전원 {i})")
+                print(f"❌ 전원 {i} 회로도 생성 실패")
                 
         except Exception as diagram_error:
-            print(f"Error generating diagram: {diagram_error}")
-            # 연결성 문제 리포트를 텍스트 파일로 저장
-            report_path = path.replace('.jpg', '_connectivity_report.txt')
-            with open(report_path, 'w', encoding='utf-8') as f:
-                f.write("회로 연결성 분석 보고서\n")
-                f.write("=" * 30 + "\n\n")
-                f.write(f"연결 상태: {'연결됨' if connectivity_report['is_connected'] else '끊어짐'}\n")
-                f.write(f"그룹 수: {connectivity_report['num_groups']}\n\n")
-                
-                if connectivity_report['issues']:
-                    f.write("문제점:\n")
-                    for issue in connectivity_report['issues']:
-                        f.write(f"- {issue}\n")
-                    f.write("\n")
-                
-                f.write("그룹별 컴포넌트:\n")
-                for j, group in enumerate(connectivity_report['groups']):
-                    comp_names = [comp['name'] for comp in group]
-                    f.write(f"그룹 {j+1}: {comp_names}\n")
-            
-            print(f"📋 연결성 보고서 저장: {report_path}")
+            print(f"전원 {i} 회로도 생성 오류: {diagram_error}")
     
-        # 6) 비교
-    # 상세 점수 출력
-    # 6) 비교 - 개선된 버전
+    # 9) 비교 (다중 전원 고려)
     try:
         compare_and_notify(G, output_img, checker_dir="checker")
-    except ImportError as e:
-        print(f"[오류] compare_and_notify 함수를 불러올 수 없습니다: {e}")
     except Exception as e:
         print(f"[오류] 회로 비교 실패: {e}")
-        import traceback; traceback.print_exc()
     
-    # 9) 전류·전압 해석
-    circuit_levels = []
-    for lvl, grp in df.groupby('node1_n', sort=False):
-        comps = []
-        for _, row in grp.iterrows():
-            comps.append({
-                'name': row['name'],
-                'value': int(row['value']),
-                'class': row['class']
-            })
-        circuit_levels.append(comps)
-
-    #R_th, I_tot, node_currents = calcCurrentAndVoltage(voltage, circuit_levels)
-    #print(f"[Circuit] 등가저항: {R_th}, 전체전류: {I_tot}")
-    #print("=== Node Voltages/ Currents per Level ===")
-    #for i, c in enumerate(node_currents):
-    #    print(f"Level {i+1}: currents = {c}")
+    print(f"\n✅ 다중 전원 회로 생성 완료!")
+    print(f"   - 총 전원 개수: {len(power_pairs)}")
+    print(f"   - 컴포넌트 개수: {len([m for m in mapped if m['class'] != 'VoltageSource'])}")
 
     return mapped, hole_to_net
+
+
+def toSPICE_multi_power(df, power_pairs, default_voltage, output_file):
+    """
+    다중 전원을 지원하는 SPICE 넷리스트 생성
+    """
+    with open(output_file, 'w') as f:
+        f.write("* Multi-Power Circuit Netlist\n")
+        f.write(f"* Generated with {len(power_pairs)} power sources\n")
+        f.write("* \n")
+        
+        # 전압원들 먼저 출력
+        for i, (net_p, _, net_m, _) in enumerate(power_pairs, 1):
+            f.write(f"V{i} {net_p} {net_m} {default_voltage}\n")
+        
+        # 다른 컴포넌트들 출력
+        for _, row in df.iterrows():
+            if row['class'] == 'VoltageSource':
+                continue  # 이미 위에서 처리함
+            elif row['class'] == 'Resistor':
+                f.write(f"{row['name']} {row['node1_n']} {row['node2_n']} {row['value']}\n")
+            elif row['class'] == 'Capacitor':
+                f.write(f"{row['name']} {row['node1_n']} {row['node2_n']} {row['value']}F\n")
+            elif row['class'] == 'Diode':
+                f.write(f"{row['name']} {row['node1_n']} {row['node2_n']} DMOD\n")
+            elif row['class'] == 'LED':
+                f.write(f"{row['name']} {row['node1_n']} {row['node2_n']} LEDMOD\n")
+        
+        f.write("* \n")
+        f.write(".MODEL DMOD D\n")
+        f.write(".MODEL LEDMOD D(IS=1E-12 N=2)\n")
+        f.write(".END\n")
+    
+    print(f"✅ 다중 전원 SPICE 파일 저장: {output_file}")
+
+
+# 기존 toSPICE 함수를 위한 래퍼 (호환성 유지)
+def toSPICE(df, voltage, output_file):
+    """기존 인터페이스 호환성을 위한 래퍼"""
+    # 단일 전원으로 가정하고 power_pairs 생성
+    power_pairs = [(1, 0, 0, 0)]  # 기본값
+    toSPICE_multi_power(df, power_pairs, voltage, output_file)
 
 def draw_connectivity_graph_from_nx_with_issues(G, connectivity_report, output_path=None):
     """
@@ -379,7 +306,7 @@ def draw_connectivity_graph_from_nx_with_issues(G, connectivity_report, output_p
     
     for node in G.nodes():
         if node in voltage_nodes:
-            node_colors.append('red')  # 전압원은 빨간색
+            node_colors.append('gray')  # 전압원 색깔은 빨간색(회색으로 설정함)
         elif node in node_to_group:
             group_idx = node_to_group[node]
             node_colors.append(group_colors[group_idx])
@@ -444,7 +371,7 @@ def draw_connectivity_graph_from_nx_with_issues(G, connectivity_report, output_p
     if voltage_nodes:
         legend_elements.append(
             plt.Line2D([0], [0], marker='o', color='w', 
-                      markerfacecolor='red',
+                      markerfacecolor='black',
                       markersize=10, label="전압원")
         )
     

@@ -1103,9 +1103,11 @@ def analyze_circuit_topology_improved(G):
     
     return all_circuit_levels, is_connected
 
+# diagram.py의 drawDiagramFromGraph_with_connectivity_check 함수 수정
+
 def drawDiagramFromGraph_with_connectivity_check(G, voltage=5.0):
     """
-    연결 상태를 확인하여 끊어진 회로는 별도로 표시하는 개선된 함수
+    연결 상태를 확인하여 끊어진 회로는 별도로 표시하는 개선된 함수 (다중 전원 지원)
     """
     # 1) 연결성 분석
     circuit_levels, is_connected = analyze_circuit_topology_improved(G)
@@ -1117,24 +1119,39 @@ def drawDiagramFromGraph_with_connectivity_check(G, voltage=5.0):
     # 2) 연결되지 않은 경우 경고 메시지와 함께 부분 회로도 생성
     if not is_connected:
         print("⚠️  주의: 연결되지 않은 회로 요소들이 있습니다. 연결된 부분만 그립니다.")
-        # (추가 로직: 끊어진 회로 표시 등)
     
-    # 3) 회로도 그리기
-    """
-    * power_pairs 리스트가 G.graph['power_pairs']에 저장되어 있다고 가정
-      power_pairs = [(net_p, x_p, net_m, x_m), (net_p2, x_p2, net_m2, x_m2), ...]
-    """
+    # 3) 다중 전원 정보 가져오기
     power_pairs = G.graph.get('power_pairs', [])
-    # [(x_p, x_m), (x_p2, x_m2), ...] 형태로 가공
-    power_positions = [(x_p, x_m) for (_, x_p, _, x_m) in power_pairs]
-    return drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connected, power_positions)
+    current_power_index = G.graph.get('current_power_index', 0)
+    
+    # 모든 전원의 위치 정보 추출
+    all_power_positions = []
+    all_power_voltages = []
+    
+    for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs):
+        all_power_positions.append((x_p, x_m))
+        # 각 전원의 전압 (현재는 모두 동일하지만 향후 확장 가능)
+        all_power_voltages.append(voltage)
+    
+    # 4) 회로도 그리기 (다중 전원 정보 전달)
+    return drawDiagram_with_multi_power_support(
+        voltage, circuit_levels, is_connected, 
+        all_power_positions, all_power_voltages, current_power_index
+    )
 
 
-
-def drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connected, power_positions):
+def drawDiagram_with_multi_power_support(voltage, circuit_levels, is_connected, 
+                                       power_positions, power_voltages, current_power_index=0):
     """
-    연결 끊김을 시각적으로 표시하는 회로도 그리기
-    power_positions: [(x_plus1, x_minus1), (x_plus2, x_minus2), ...]
+    다중 전원을 지원하는 회로도 그리기 함수
+    
+    Args:
+        voltage: 대표 전압
+        circuit_levels: 회로 레벨 정보
+        is_connected: 연결 상태
+        power_positions: [(x_plus1, x_minus1), (x_plus2, x_minus2), ...]
+        power_voltages: [voltage1, voltage2, ...] 
+        current_power_index: 현재 강조할 전원의 인덱스
     """
     import schemdraw
     import schemdraw.elements as e
@@ -1144,7 +1161,10 @@ def drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connect
     d.config(unit=3.0)      # 기본 단위 크기를 3배로
     d.config(fontsize=14)   # 폰트 크기도 키우기
 
-    # 2) 연결 끊김 경고 (is_connected==False 경우)
+    # 2) 다중 전원 표시 및 연결 끊김 경고
+    if len(power_positions) > 1:
+        d += e.Label().label(f"🔋 Multi-Power Circuit ({len(power_positions)} sources)").color('blue').at((0, 1.5))
+    
     if not is_connected:
         d += e.Label().label("⚠️ DISCONNECTED CIRCUIT ⚠️").color('red').at((0, 1))
 
@@ -1160,7 +1180,7 @@ def drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connect
             element = get_component_element(comp)
             d += element
 
-        # (3-2) 병렬 레벨 (정확히 2개일 때만 예시)
+        # (3-2) 병렬 레벨 (정확히 2개일 때)
         elif level_size == 2:
             # (a) 수평으로 약간 이동
             d += e.Line().right(d.unit/3)
@@ -1182,42 +1202,118 @@ def drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connect
             # (d) 병렬 블록 끝에서 오른쪽으로 이동
             d += e.Line().right(d.unit/3)
 
-        # (3-3) 2개 초과 병렬 레벨 처리 (필요 시 확장)
+        # (3-3) 2개 초과 병렬 레벨 처리
         else:
-            # 단순히 순차적으로 나열 (더 복잡한 병렬 배치가 필요하면 이 부분을 확장)
-            for comp in level:
-                elem = get_component_element(comp)
-                d += elem
-
-    # 4) 전원 연결 그리기 (is_connected일 때만)
-    if is_connected:
-        for idx, (x_p, x_m) in enumerate(power_positions):
-            # (a) 전원 심볼 배치 기준점
-            d += (n1 := e.Dot())
-            d += e.Line().down().at(n1.end)
-            d += (n2 := e.Dot())
+            # 다중 병렬 컴포넌트 배치
+            d += e.Line().right(d.unit/4)
+            d.push()
+            
+            spacing = 1.0
+            for comp_idx, comp in enumerate(level):
+                if comp_idx > 0:
+                    d.pop()
+                    d.push()
+                
+                # 수직 오프셋 계산
+                vertical_offset = (comp_idx - (level_size-1)/2) * spacing
+                
+                if vertical_offset != 0:
+                    d += e.Line().up(vertical_offset * d.unit)
+                
+                element = get_component_element(comp)
+                d += element
+                
+                if vertical_offset != 0:
+                    d += e.Line().down(vertical_offset * d.unit)
+            
             d.pop()
-            d += (n3 := e.Dot())
+            d += e.Line().right(d.unit/4)
 
-            # (b) plus/minus 좌우 위치 비교 → 방향 결정
-            if x_p < x_m:
-                # plus가 왼쪽(작은 x), minus가 오른쪽(큰 x)
-                d += e.SourceV().down().label(f"V{idx+1}\n{voltage}V").at(n3.end)
-            else:
-                # minus가 왼쪽, plus가 오른쪽 → reversed
-                d += e.SourceV().down().label(f"V{idx+1}\n{voltage}V").at(n3.end).reverse()
+    # 4) 다중 전원 연결 그리기
+    if is_connected and power_positions:
+        
+        # 현재 강조할 전원이 유효한 범위인지 확인
+        if current_power_index < len(power_positions):
+            main_power_idx = current_power_index
+        else:
+            main_power_idx = 0
+        
+        # 메인 전원 그리기 (더 큰 크기와 강조색)
+        x_p, x_m = power_positions[main_power_idx]
+        main_voltage = power_voltages[main_power_idx] if main_power_idx < len(power_voltages) else voltage
+        
+        d += (n1 := e.Dot())
+        d += e.Line().down().at(n1.end)
+        d += (n2 := e.Dot())
+        d.pop()
+        d += (n3 := e.Dot())
 
-            d += (n4 := e.Dot())
-            d += e.Line().right().endpoints(n4.end, n2.end)
+        # plus/minus 위치에 따른 방향 결정
+        if x_p < x_m:
+            # plus가 왼쪽, minus가 오른쪽
+            main_vs = e.SourceV().down().label(f"V{main_power_idx+1}*\n{main_voltage}V").at(n3.end).reverse()
+        else:
+            # minus가 왼쪽, plus가 오른쪽
+            main_vs = e.SourceV().down().label(f"V{main_power_idx+1}*\n{main_voltage}V").at(n3.end)
+        
+        main_vs.color('black')  # 메인 전원은 빨간색으로 강조
+        d += main_vs
+        d += (n4 := e.Dot())
+        d += e.Line().right().endpoints(n4.end, n2.end)
 
-            # (c) 만약 다음 전원을 좀 위/아래나 더 오른쪽으로 분리하고 싶다면,
-            #     예를 들어 d += e.Line().up(d.unit/2) 같이 추가 가능
+        # 추가 전원들 표시 (작은 크기)
+        if len(power_positions) > 1:
+            # 추가 전원들을 옆쪽에 배치
+            for i, ((x_p_add, x_m_add), v_add) in enumerate(zip(power_positions, power_voltages)):
+                if i == main_power_idx:
+                    continue  # 메인 전원은 이미 그렸음
+                
+                # 추가 전원을 우측에 작게 배치
+                offset_x = 2 + (i - (0 if i < main_power_idx else 1)) * 1.5
+                offset_y = -1 - (i - (0 if i < main_power_idx else 1)) * 0.5
+                
+                d.push()
+                d += e.Line().right(offset_x * d.unit).linewidth(0)
+                d += e.Line().down(offset_y * d.unit).linewidth(0)
+                
+                # 작은 전압원
+                if x_p_add < x_m_add:
+                    add_vs = e.SourceV().down().label(f"V{i+1}\n{v_add}V").scale(0.7)
+                else:
+                    add_vs = e.SourceV().down().label(f"V{i+1}\n{v_add}V").scale(0.7).reverse()
+                
+                add_vs.color('gray')  # 추가 전원은 회색
+                d += add_vs
+                d.pop()
+
+        # 다중 전원 정보 텍스트
+        if len(power_positions) > 1:
+            power_info = f"Total: {len(power_positions)} power sources"
+            if main_power_idx < len(power_positions):
+                power_info += f" (* = Active: V{main_power_idx+1})"
+            d += e.Label().label(power_info).color('blue').at((0, -3))
 
     else:
-        # 연결 안 된 경우 전원 대신 경고만 출력
-        d += e.Label().label("전원 연결 불가 - 회로 끊어짐").color('red')
+        # 연결 안 된 경우 또는 전원이 없는 경우
+        if not power_positions:
+            d += e.Label().label("전원 없음").color('orange')
+        else:
+            d += e.Label().label("전원 연결 불가 - 회로 끊어짐").color('red')
 
     return d
+
+
+# 기존 함수 개선 (호환성 유지)
+def drawDiagram_with_disconnection_indicator(voltage, circuit_levels, is_connected, power_positions):
+    """
+    기존 함수의 호환성을 위한 래퍼 (단일 전원용)
+    """
+    power_voltages = [voltage] * len(power_positions) if power_positions else [voltage]
+    return drawDiagram_with_multi_power_support(
+        voltage, circuit_levels, is_connected, 
+        power_positions, power_voltages, current_power_index=0
+    )
+
 
 def validate_circuit_connectivity(G):
     """

@@ -1,12 +1,11 @@
-* SPICE
-
-V1 176 443 DC 5.0
-
-R1 443 180 100
-R2 180 176 100
-R3 180 176 100
-V1 443 176 5.0
-
-.op
-.tran 0 10ms 0ms 0.1ms
-.end
+* Multi-Power Circuit Netlist
+* Generated with 1 power sources
+* 
+V1 6 167 5.0
+R1 174 169 100.0
+R2 6 174 100.0
+R3 169 167 100.0
+* 
+.MODEL DMOD D
+.MODEL LEDMOD D(IS=1E-12 N=2)
+.END
