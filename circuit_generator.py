@@ -1,4 +1,4 @@
-# circuit_generator.py (전체 수정)
+# circuit_generator.py (완전 안정화된 버전)
 import os
 import pandas as pd
 import numpy as np
@@ -15,28 +15,685 @@ from checker.Circuit_comparer import CircuitComparer
 import matplotlib
 import tkinter as tk
 from tkinter import messagebox
-matplotlib.use('TkAgg')  # 또는 'Qt5Agg', 'WxAgg' 등 다른 대화형 백엔드
-# 이후 schemdraw 코드 실행
+matplotlib.use('TkAgg')
 import cv2
 import os, glob, re
 from diagram import validate_circuit_connectivity,generate_circuit_from_spice
 from new_diagram import draw_new_diagram
-
-# 실습 주제 맵
+from collections import defaultdict, deque
+import re
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.patches import FancyBboxPatch, Circle
+# 실습 주제 맵 (기존과 동일)
 topic_map = {
-    0: "test용 회로", 1: "병렬회로", 2: "직렬회로", 3: "키르히호프 1법칙", 4: "키르히호프 2법칙",
+    0: "test용 회로", 1: "병렬회로", 2: "직렬회로", 3: "키르히호프 2법칙", 4: "키르히호프 2법칙",
     5: "중첩의 원리", 6: "오실로스코프 실습1", 7: "오실로스코프 실습2",
     8: "반파정류회로", 9: "반파정류회로2", 10: "비반전 증폭기"
 }
 
+
+# 연결선 포함 정확한 회로도 생성 함수
+
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.patches import FancyBboxPatch, Circle
+import numpy as np
+from collections import defaultdict
+
+def analyze_spice_topology(components):
+    """
+    SPICE 컴포넌트로부터 회로 토폴로지 분석
+    """
+    print("🔍 SPICE 토폴로지 분석...")
+    
+    # 네트별 연결 정보
+    net_connections = defaultdict(list)
+    all_nets = set()
+    
+    for comp in components:
+        node1, node2 = comp['nodes']
+        all_nets.update([node1, node2])
+        net_connections[node1].append(comp)
+        net_connections[node2].append(comp)
+    
+    print("=== 네트 연결 분석 ===")
+    for net in sorted(all_nets):
+        comps = net_connections[net]
+        comp_names = [c['name'] for c in comps]
+        print(f"Net{net}: {comp_names} ({len(comps)}개 연결)")
+    
+    # 공통 노드 찾기
+    junction_nets = []
+    for net, comps in net_connections.items():
+        if len(comps) >= 3:  # 3개 이상 연결된 노드는 접점
+            junction_nets.append(net)
+    
+    print(f"접점 노드: {junction_nets}")
+    
+    return {
+        'net_connections': dict(net_connections),
+        'all_nets': sorted(all_nets),
+        'junction_nets': junction_nets
+    }
+
+
+def create_connected_layout(components, topology):
+    """
+    연결 관계를 고려한 레이아웃 생성
+    """
+    print("📐 연결 기반 레이아웃 생성...")
+    
+    net_connections = topology['net_connections']
+    junction_nets = topology['junction_nets']
+    
+    # 네트별 위치 결정
+    net_positions = {}
+    
+    # 접점들을 중앙에 배치
+    if junction_nets:
+        for i, net in enumerate(junction_nets):
+            net_positions[net] = (6, 4 + i * 1.5)  # 중앙 세로 배치
+            print(f"접점 Net{net}: 위치 {net_positions[net]}")
+    
+    # 전압원들의 네트 위치
+    vs_components = [c for c in components if c['class'] == 'VoltageSource']
+    for i, vs in enumerate(vs_components):
+        node1, node2 = vs['nodes']
+        
+        # 접점에 연결되지 않은 노드를 왼쪽에
+        for node in [node1, node2]:
+            if node not in net_positions:
+                net_positions[node] = (1.5, 5 - i * 2)
+                print(f"전원 Net{node}: 위치 {net_positions[node]}")
+    
+    # 나머지 네트들 자동 배치
+    other_nets = set(topology['all_nets']) - set(net_positions.keys())
+    for i, net in enumerate(sorted(other_nets)):
+        net_positions[net] = (9, 5 - i * 1.5)
+        print(f"기타 Net{net}: 위치 {net_positions[net]}")
+    
+    # 컴포넌트 위치 계산 (네트 중점에)
+    component_layout = {}
+    for comp in components:
+        node1, node2 = comp['nodes']
+        pos1 = net_positions[node1]
+        pos2 = net_positions[node2]
+        
+        # 중점 계산
+        mid_x = (pos1[0] + pos2[0]) / 2
+        mid_y = (pos1[1] + pos2[1]) / 2
+        
+        component_layout[comp['name']] = {
+            'component': comp,
+            'position': (mid_x, mid_y),
+            'net_positions': (pos1, pos2)
+        }
+    
+    return {
+        'net_positions': net_positions,
+        'component_layout': component_layout
+    }
+
+
+def draw_connected_circuit_diagram(components, output_path):
+    """
+    연결선을 포함한 정확한 회로도 생성
+    """
+    print(f"\n🎨 연결선 포함 회로도 생성: {output_path}")
+    
+    try:
+        # 토폴로지 분석
+        topology = analyze_spice_topology(components)
+        
+        # 레이아웃 생성
+        layout = create_connected_layout(components, topology)
+        net_positions = layout['net_positions']
+        component_layout = layout['component_layout']
+        
+        # 그래프 생성
+        fig, ax = plt.subplots(1, 1, figsize=(14, 10))
+        
+        # 1) 네트 노드들 먼저 그리기
+        print("=== 네트 노드 그리기 ===")
+        for net, pos in net_positions.items():
+            # 접점은 크게, 일반 노드는 작게
+            is_junction = net in topology['junction_nets']
+            size = 150 if is_junction else 80
+            color = 'red' if is_junction else 'blue'
+            
+            ax.scatter(pos[0], pos[1], c=color, s=size, zorder=10, 
+                      edgecolors='black', linewidth=2)
+            
+            # 네트 라벨
+            ax.text(pos[0], pos[1]-0.4, f'Net{net}', ha='center', va='center', 
+                   fontsize=10, fontweight='bold',
+                   bbox=dict(boxstyle="round,pad=0.2", facecolor="lightyellow"))
+            
+            print(f"Net{net}: {pos} ({'접점' if is_junction else '일반'})")
+        
+        # 2) 연결선 그리기
+        print("=== 연결선 그리기 ===")
+        for comp_name, info in component_layout.items():
+            comp = info['component']
+            pos1, pos2 = info['net_positions']
+            
+            # 네트 간 연결선
+            ax.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], 
+                   'k-', linewidth=2, alpha=0.7, zorder=1)
+            
+            print(f"{comp_name}: Net{comp['nodes'][0]} ↔ Net{comp['nodes'][1]}")
+        
+        # 3) 컴포넌트 심볼 그리기
+        print("=== 컴포넌트 그리기 ===")
+        for comp_name, info in component_layout.items():
+            comp = info['component']
+            mid_x, mid_y = info['position']
+            
+            if comp['class'] == 'VoltageSource':
+                # 전압원 원
+                circle = Circle((mid_x, mid_y), 0.3, linewidth=3, 
+                              edgecolor='red', facecolor='lightcoral', zorder=5)
+                ax.add_patch(circle)
+                
+                # + - 표시
+                ax.text(mid_x, mid_y+0.1, '+', ha='center', va='center', 
+                       fontsize=12, fontweight='bold')
+                ax.text(mid_x, mid_y-0.1, '−', ha='center', va='center', 
+                       fontsize=12, fontweight='bold')
+                
+                # 라벨
+                ax.text(mid_x, mid_y-0.6, f'{comp["name"]}\n{comp["value"]}V', 
+                       ha='center', va='center', fontsize=10, fontweight='bold', color='red')
+            
+            elif comp['class'] == 'Resistor':
+                # 저항 사각형
+                rect = FancyBboxPatch((mid_x-0.4, mid_y-0.15), 0.8, 0.3,
+                                    boxstyle="round,pad=0.05",
+                                    linewidth=2, edgecolor='blue', facecolor='lightblue', zorder=5)
+                ax.add_patch(rect)
+                
+                # 라벨
+                ax.text(mid_x, mid_y, f'{comp["name"]}\n{comp["value"]}Ω', 
+                       ha='center', va='center', fontsize=9, fontweight='bold')
+            
+            elif comp['class'] == 'Capacitor':
+                # 캐패시터 (두 평행선)
+                ax.plot([mid_x-0.1, mid_x-0.1], [mid_y-0.2, mid_y+0.2], 'k-', linewidth=3, zorder=5)
+                ax.plot([mid_x+0.1, mid_x+0.1], [mid_y-0.2, mid_y+0.2], 'k-', linewidth=3, zorder=5)
+                
+                # 라벨
+                ax.text(mid_x, mid_y-0.5, f'{comp["name"]}\n{comp["value"]}F', 
+                       ha='center', va='center', fontsize=9, fontweight='bold')
+        
+        # 4) 접지 표시 (Net 0이 있다면)
+        if 0 in net_positions:
+            ground_pos = net_positions[0]
+            # 접지 심볼
+            ax.plot([ground_pos[0], ground_pos[0]], [ground_pos[1]-0.3, ground_pos[1]-0.8], 
+                   'k-', linewidth=4)
+            for i in range(3):
+                width = 0.3 - i * 0.1
+                ax.plot([ground_pos[0]-width, ground_pos[0]+width], 
+                       [ground_pos[1]-0.8-i*0.1, ground_pos[1]-0.8-i*0.1], 
+                       'k-', linewidth=2)
+            
+            ax.text(ground_pos[0], ground_pos[1]-1.2, 'GND', ha='center', va='center', 
+                   fontsize=10, fontweight='bold')
+        
+        # 회로 정보
+        vs_count = len([c for c in components if c['class'] == 'VoltageSource'])
+        r_count = len([c for c in components if c['class'] == 'Resistor'])
+        
+        ax.set_xlim(0, 12)
+        ax.set_ylim(0, 8)
+        ax.set_title(f'SPICE 기반 연결된 회로도\n전원: {vs_count}개, 저항: {r_count}개, 접점: {len(topology["junction_nets"])}개', 
+                    fontsize=14, fontweight='bold')
+        ax.axis('off')
+        
+        # 범례
+        legend_text = "컴포넌트:\n"
+        for comp in components:
+            legend_text += f"• {comp['name']}: {comp['value']}{comp['unit']}\n"
+        
+        ax.text(0.02, 0.98, legend_text, transform=ax.transAxes, 
+               fontsize=9, verticalalignment='top',
+               bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcyan"))
+        
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        print(f"✅ 연결된 회로도 저장: {output_path}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ 연결된 회로도 생성 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def create_traditional_circuit_diagram(components, output_path):
+    """
+    전통적인 회로도 스타일로 생성 (깔끔한 버전)
+    """
+    print(f"\n🎨 전통적인 회로도 생성: {output_path}")
+    
+    try:
+        # 특정 회로에 맞는 수동 레이아웃
+        # V1 170-104, V2 234-104, R1 48-108, R2 6-108, R3 108-234
+        
+        fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+        
+        # 회로 분석
+        vs_list = [c for c in components if c['class'] == 'VoltageSource']
+        r_list = [c for c in components if c['class'] == 'Resistor']
+        
+        print("=== 특정 회로 토폴로지 기반 레이아웃 ===")
+        
+        # Net104는 공통 접점 (중앙)
+        common_net = 104
+        junction_pos = (6, 4)
+        
+        # V1: Net170 - Net104
+        v1_net170_pos = (2, 6)
+        
+        # V2: Net234 - Net104  
+        v2_net234_pos = (10, 6)
+        
+        # R3: Net108 - Net234
+        r3_net108_pos = (6, 2)
+        
+        # R1: Net48 - Net108
+        r1_net48_pos = (4, 2)
+        
+        # R2: Net6 - Net108
+        r2_net6_pos = (8, 2)
+        
+        net_positions = {
+            170: v1_net170_pos,
+            104: junction_pos,
+            234: v2_net234_pos,
+            108: r3_net108_pos,
+            48: r1_net48_pos,
+            6: r2_net6_pos
+        }
+        
+        # 네트 노드 그리기
+        for net, pos in net_positions.items():
+            color = 'red' if net == 104 else 'blue'
+            size = 120 if net == 104 else 60
+            ax.scatter(pos[0], pos[1], c=color, s=size, zorder=10, 
+                      edgecolors='black', linewidth=2)
+            ax.text(pos[0]+0.3, pos[1]+0.3, f'Net{net}', ha='left', va='bottom', 
+                   fontsize=9, fontweight='bold')
+        
+        # 컴포넌트와 연결선 그리기
+        for comp in components:
+            node1, node2 = comp['nodes']
+            pos1 = net_positions[node1]
+            pos2 = net_positions[node2]
+            
+            # 연결선
+            ax.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], 
+                   'k-', linewidth=2, zorder=1)
+            
+            # 컴포넌트 중점
+            mid_x = (pos1[0] + pos2[0]) / 2
+            mid_y = (pos1[1] + pos2[1]) / 2
+            
+            if comp['class'] == 'VoltageSource':
+                # 전압원
+                circle = Circle((mid_x, mid_y), 0.25, linewidth=2, 
+                              edgecolor='red', facecolor='lightcoral', zorder=5)
+                ax.add_patch(circle)
+                ax.text(mid_x, mid_y+0.05, '+', ha='center', va='center', 
+                       fontsize=10, fontweight='bold')
+                ax.text(mid_x, mid_y-0.05, '−', ha='center', va='center', 
+                       fontsize=10, fontweight='bold')
+                ax.text(mid_x, mid_y-0.5, f'{comp["name"]}\n{comp["value"]}V', 
+                       ha='center', va='center', fontsize=9, fontweight='bold', color='red')
+            
+            elif comp['class'] == 'Resistor':
+                # 저항
+                rect = FancyBboxPatch((mid_x-0.3, mid_y-0.1), 0.6, 0.2,
+                                    boxstyle="round,pad=0.02",
+                                    linewidth=2, edgecolor='blue', facecolor='lightblue', zorder=5)
+                ax.add_patch(rect)
+                ax.text(mid_x, mid_y, f'{comp["name"]}\n{comp["value"]}Ω', 
+                       ha='center', va='center', fontsize=8, fontweight='bold')
+        
+        ax.set_xlim(0, 12)
+        ax.set_ylim(0, 8)
+        ax.set_title('전통적인 회로도 (Net104 중심 접점)', fontsize=14, fontweight='bold')
+        ax.axis('off')
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        print(f"✅ 전통적인 회로도 저장: {output_path}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ 전통적인 회로도 생성 실패: {e}")
+        return False
+
+
+# circuit_generator.py에 추가할 함수들
+def generate_multiple_diagram_types(spice_components, base_output_path):
+    """
+    여러 타입의 회로도 생성
+    """
+    success_count = 0
+    
+    # 1) 연결선 포함 버전
+    connected_path = base_output_path.replace('.jpg', '_connected.jpg')
+    if draw_connected_circuit_diagram(spice_components, connected_path):
+        success_count += 1
+    
+    # 2) 전통적인 버전
+    traditional_path = base_output_path.replace('.jpg', '_traditional.jpg')
+    if create_traditional_circuit_diagram(spice_components, traditional_path):
+        success_count += 1
+    
+    print(f"✅ {success_count}/2 타입 회로도 생성 완료")
+    return success_count > 0
+
+
+# 기존 generate_output_files 함수의 SPICE 부분을 다음으로 교체:
+
+
+# 2) SPICE 파싱 함수들 추가 (generate_circuit 함수 전에)
+def parse_spice_file(spice_filepath):
+    """SPICE 파일을 파싱하여 컴포넌트 리스트 반환"""
+    print(f"📄 SPICE 파일 파싱: {spice_filepath}")
+    
+    components = []
+    
+    try:
+        with open(spice_filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        for line_num, line in enumerate(lines, 1):
+            line = line.strip()
+            
+            # 빈 줄이나 주석 건너뛰기
+            if not line or line.startswith('*') or line.startswith('.'):
+                continue
+            
+            print(f"   라인 {line_num}: {line}")
+            
+            # 전압원 파싱 (V로 시작)
+            if line.upper().startswith('V'):
+                parts = line.split()
+                if len(parts) >= 4:
+                    name = parts[0]
+                    node1 = int(parts[1])
+                    node2 = int(parts[2])
+                    value = float(parts[3])
+                    
+                    components.append({
+                        'name': name,
+                        'class': 'VoltageSource',
+                        'value': value,
+                        'nodes': (node1, node2),
+                        'unit': 'V'
+                    })
+                    print(f"      ✅ 전압원: {name} = {value}V, Net{node1} ↔ Net{node2}")
+            
+            # 저항 파싱 (R로 시작)
+            elif line.upper().startswith('R'):
+                parts = line.split()
+                if len(parts) >= 4:
+                    name = parts[0]
+                    node1 = int(parts[1])
+                    node2 = int(parts[2])
+                    value = float(parts[3])
+                    
+                    components.append({
+                        'name': name,
+                        'class': 'Resistor',
+                        'value': value,
+                        'nodes': (node1, node2),
+                        'unit': 'Ω'
+                    })
+                    print(f"      ✅ 저항: {name} = {value}Ω, Net{node1} ↔ Net{node2}")
+            
+            # 캐패시터 파싱 (C로 시작)
+            elif line.upper().startswith('C'):
+                parts = line.split()
+                if len(parts) >= 4:
+                    name = parts[0]
+                    node1 = int(parts[1])
+                    node2 = int(parts[2])
+                    value = float(parts[3])
+                    
+                    components.append({
+                        'name': name,
+                        'class': 'Capacitor',
+                        'value': value,
+                        'nodes': (node1, node2),
+                        'unit': 'F'
+                    })
+                    print(f"      ✅ 캐패시터: {name} = {value}F, Net{node1} ↔ Net{node2}")
+        
+        print(f"✅ SPICE 파싱 완료: 총 {len(components)}개 컴포넌트")
+        return components
+        
+    except FileNotFoundError:
+        print(f"❌ SPICE 파일을 찾을 수 없습니다: {spice_filepath}")
+        return []
+    except Exception as e:
+        print(f"❌ SPICE 파일 파싱 오류: {e}")
+        return []
+
+
+def draw_spice_based_circuit(components, output_path):
+    """SPICE 데이터로부터 직접 회로도 생성"""
+    print(f"\n🎨 SPICE 기반 회로도 생성: {output_path}")
+    
+    try:
+        fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+        
+        vs_list = [c for c in components if c['class'] == 'VoltageSource']
+        r_list = [c for c in components if c['class'] == 'Resistor']
+        c_list = [c for c in components if c['class'] == 'Capacitor']
+        
+        print(f"📊 SPICE 기반 회로: 전압원 {len(vs_list)}개, 저항 {len(r_list)}개, 캐패시터 {len(c_list)}개")
+        
+        # 전압원들 왼쪽에 세로로 배치
+        for i, vs in enumerate(vs_list):
+            x, y = 1.5, 6 - i * 2.5
+            
+            # 전압원 원
+            circle = Circle((x, y), 0.4, linewidth=3, edgecolor='red', facecolor='lightcoral')
+            ax.add_patch(circle)
+            
+            # + - 표시
+            ax.text(x, y+0.15, '+', ha='center', va='center', fontsize=14, fontweight='bold')
+            ax.text(x, y-0.15, '−', ha='center', va='center', fontsize=14, fontweight='bold')
+            
+            # 라벨
+            ax.text(x-0.8, y, f'{vs["name"]}\n{vs["value"]}V', ha='center', va='center', 
+                   fontsize=12, fontweight='bold', color='red')
+            
+            # 터미널 연결선
+            ax.plot([x-0.6, x-0.4], [y, y], 'k-', linewidth=3)  # 음극 터미널
+            ax.plot([x+0.4, x+0.6], [y, y], 'k-', linewidth=3)  # 양극 터미널
+            
+            # 노드 라벨
+            ax.text(x-0.8, y+0.6, f"Net{vs['nodes'][0]}", ha='center', fontsize=10, 
+                   color='blue', fontweight='bold', 
+                   bbox=dict(boxstyle="round,pad=0.2", facecolor="lightblue"))
+            ax.text(x+0.8, y+0.6, f"Net{vs['nodes'][1]}", ha='center', fontsize=10, 
+                   color='blue', fontweight='bold',
+                   bbox=dict(boxstyle="round,pad=0.2", facecolor="lightblue"))
+        
+        # 저항들 중간에 배치
+        for i, res in enumerate(r_list):
+            x = 4 + (i % 2) * 2.5
+            y = 6 - (i // 2) * 1.5
+            
+            # 저항 사각형
+            rect = FancyBboxPatch((x-0.5, y-0.2), 1.0, 0.4,
+                                boxstyle="round,pad=0.05",
+                                linewidth=2, edgecolor='blue', facecolor='lightblue')
+            ax.add_patch(rect)
+            
+            # 라벨
+            ax.text(x, y, f'{res["name"]}\n{res["value"]}Ω', ha='center', va='center', 
+                   fontsize=11, fontweight='bold')
+            
+            # 터미널
+            ax.plot([x-0.8, x-0.5], [y, y], 'k-', linewidth=2)
+            ax.plot([x+0.5, x+0.8], [y, y], 'k-', linewidth=2)
+            
+            # 노드 라벨
+            ax.text(x-1.0, y+0.5, f"Net{res['nodes'][0]}", ha='center', fontsize=10, 
+                   color='green', fontweight='bold',
+                   bbox=dict(boxstyle="round,pad=0.2", facecolor="lightgreen"))
+            ax.text(x+1.0, y+0.5, f"Net{res['nodes'][1]}", ha='center', fontsize=10, 
+                   color='green', fontweight='bold',
+                   bbox=dict(boxstyle="round,pad=0.2", facecolor="lightgreen"))
+        
+        # 캐패시터들 오른쪽에 배치
+        for i, cap in enumerate(c_list):
+            x = 7 + (i % 2) * 1.5
+            y = 6 - (i // 2) * 1.5
+            
+            # 캐패시터 (두 평행선)
+            ax.plot([x-0.15, x-0.15], [y-0.3, y+0.3], 'k-', linewidth=4)
+            ax.plot([x+0.15, x+0.15], [y-0.3, y+0.3], 'k-', linewidth=4)
+            
+            # 라벨
+            ax.text(x, y-0.6, f'{cap["name"]}\n{cap["value"]}F', ha='center', va='center', 
+                   fontsize=10, fontweight='bold')
+            
+            # 터미널
+            ax.plot([x-0.5, x-0.15], [y, y], 'k-', linewidth=2)
+            ax.plot([x+0.15, x+0.5], [y, y], 'k-', linewidth=2)
+            
+            # 노드 라벨
+            ax.text(x-0.7, y+0.5, f"Net{cap['nodes'][0]}", ha='center', fontsize=9, 
+                   color='purple', fontweight='bold',
+                   bbox=dict(boxstyle="round,pad=0.2", facecolor="plum"))
+            ax.text(x+0.7, y+0.5, f"Net{cap['nodes'][1]}", ha='center', fontsize=9, 
+                   color='purple', fontweight='bold',
+                   bbox=dict(boxstyle="round,pad=0.2", facecolor="plum"))
+        
+        # 접지 표시 (Net 0)
+        if any(0 in comp['nodes'] for comp in components):
+            ax.axhline(y=0.5, xmin=0.1, xmax=0.9, color='black', linewidth=4)
+            for i in range(3):
+                ax.axhline(y=0.3-i*0.1, xmin=0.45, xmax=0.55, color='black', linewidth=2)
+            ax.text(6, 0.8, 'Ground (Net 0)', ha='center', va='center', 
+                   fontsize=12, fontweight='bold')
+        
+        ax.set_xlim(0, 12)
+        ax.set_ylim(0, 8)
+        ax.set_title(f'SPICE 기반 정확한 다중 전원 회로도\n' + 
+                    f'전원: {len(vs_list)}개 (각각 독립적), 저항: {len(r_list)}개, 캐패시터: {len(c_list)}개', 
+                    fontsize=14, fontweight='bold')
+        ax.axis('off')
+        
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        print(f"✅ SPICE 기반 정확한 회로도 저장: {output_path}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ SPICE 기반 회로도 생성 실패: {e}")
+        return False
+
+
+# 3) generate_output_files 함수 수정 (기존 함수 전체 교체)
+def generate_output_files(mapped, stable_power_pairs, voltage, output_spice, output_img):
+    """
+    출력 파일들 생성 (디버깅 강화)
+    """
+    print("  📁 출력 파일 생성 중...")
+    
+    # 🔍 디버깅: 넷 매핑 과정 추적
+    debug_net_mapping_process(
+        stable_hole_to_net={},  # 실제로는 전달받아야 함
+        stable_wires=[],        # 실제로는 전달받아야 함  
+        mapped_components=mapped
+    )
+    
+    # DataFrame 생성 (병합된 넷 번호 포함)
+    df = pd.DataFrame([{
+        'name': m['name'],
+        'class': m['class'],
+        'value': m['value'],
+        'node1_n': m['nodes'][0],
+        'node2_n': m['nodes'][1],
+    } for m in mapped])
+    
+    print("\n📊 DataFrame 내용:")
+    for _, row in df.iterrows():
+        print(f"  {row['name']}: {row['class']} Net{row['node1_n']}↔Net{row['node2_n']} = {row['value']}")
+    
+    # 안정화된 그래프 생성
+    G = build_stable_circuit_graph(mapped)
+    
+    # 파일들 저장
+    save_circuit_graph(G, output_img.replace('.jpg', '.graphml'))
+    
+    # 🔧 핵심: 병합된 넷 번호로 SPICE 생성
+    toSPICE_multi_power(df, stable_power_pairs, voltage, output_spice)
+    
+    # 기존 회로도 생성 시도
+    try:
+        generate_circuit_diagrams(G, voltage, output_img, stable_power_pairs)
+    except Exception as e:
+        print(f"  ⚠️ 기존 회로도 생성 실패: {e}")
+    
+    # SPICE 기반 연결된 회로도 생성
+    try:
+        if os.path.exists(output_spice):
+            spice_components = parse_spice_file(output_spice)
+            if spice_components:
+                print(f"\n✅ SPICE 파싱 성공: {len(spice_components)}개 컴포넌트")
+                
+                # 연결된 회로도들 생성
+                connected_path = output_img.replace('.jpg', '_connected.jpg')
+                traditional_path = output_img.replace('.jpg', '_traditional.jpg')
+                
+                if draw_connected_circuit_diagram(spice_components, connected_path):
+                    print(f"✅ 연결된 회로도: {connected_path}")
+                
+                if create_traditional_circuit_diagram(spice_components, traditional_path):
+                    print(f"✅ 전통적 회로도: {traditional_path}")
+                    
+            else:
+                print("❌ SPICE 파싱 결과가 비어있습니다")
+        else:
+            print(f"❌ SPICE 파일을 찾을 수 없습니다: {output_spice}")
+            
+    except Exception as e:
+        print(f"❌ SPICE 기반 회로도 생성 중 오류: {e}")
+    
+    # 비교 분석
+    try:
+        compare_and_notify(G, output_img, checker_dir="checker")
+    except Exception as e:
+        print(f"  ⚠️ 회로 비교 실패: {e}")
+
+# 4) generate_circuit 함수 마지막에 return 문 추가
+# generate_circuit 함수의 마지막 줄을 다음으로 교체:
+
 def compare_and_notify(G, output_img, checker_dir="checker"):
-    # 1) 파일 수집
+    """회로 비교 및 알림 (기존과 동일)"""
     files = glob.glob(os.path.join(checker_dir, "*.graphml"))
     if not files:
         print("[비교] 기준 .graphml 파일이 없습니다.")
         return
 
-    # 2) 유사도 계산
     sims = []
     for path in files:
         try:
@@ -46,13 +703,11 @@ def compare_and_notify(G, output_img, checker_dir="checker"):
         except Exception as e:
             print(f"[비교 실패] {path}: {e}")
 
-    # 3) 결과 출력 (Top3)
     sims.sort(key=lambda x: x[1], reverse=True)
     print("\n=== 유사도 TOP 3 ===")
     for i, (fn, sc) in enumerate(sims[:3], 1):
         print(f"{i}. {fn}: {sc:.3f}")
 
-    # 4) 최우수 항목 팝업 알림
     best_fn, _ = sims[0]
     m = re.search(r"(\d+)", best_fn)
     topic = topic_map.get(int(m.group(1))) if m else None
@@ -63,91 +718,359 @@ def compare_and_notify(G, output_img, checker_dir="checker"):
     messagebox.showinfo("회로 비교 결과", msg)
     root.destroy()
 
-# circuit_generator.py의 generate_circuit 함수 부분 수정
+
 def generate_circuit(
     all_comps: list,
     holes: list,
     wires: list,
-    voltage: float,  # 대표 전압 (첫 번째 전원)
+    voltage: float,
     output_spice: str,
     output_img: str,
     hole_to_net: dict,
-    power_pairs: list[tuple[int, float, int, float]] = None  # [(net_p, x_p, net_m, x_m), ...]
+    power_pairs: list[tuple[int, float, int, float]] = None
 ):
-    # 1) wires 기반 넷 병합 (Union-Find)
-    parent = {net: net for net in set(hole_to_net.values())}
+    """
+    완전히 안정화된 회로 생성 함수 (전류 흐름 기반)
+    """
+    print("🔧 완전 안정화된 회로 생성 시작...")
+    
+    # 🔧 1) 모든 입력 데이터 안정화
+    stable_data = stabilize_input_data(all_comps, wires, power_pairs, hole_to_net)
+    stable_all_comps = stable_data['components']
+    stable_wires = stable_data['wires'] 
+    stable_power_pairs = stable_data['power_pairs']
+    stable_hole_to_net = stable_data['hole_to_net']
+    
+    # 🔧 2) 안정화된 Union-Find로 넷 병합
+    merged_nets = perform_stable_net_merging(stable_wires, stable_hole_to_net)
+    
+    # 🔧 3) 안정화된 컴포넌트 매핑 (전류 흐름 순서)
+    mapped = create_stable_component_mapping(
+        stable_all_comps, stable_power_pairs, voltage, merged_nets, stable_hole_to_net
+    )
+    
+    # 🔧 4) 결과 파일 생성
+    generate_output_files(mapped, stable_power_pairs, voltage, output_spice, output_img)
+    
+    print(f"✅ 안정화된 회로 생성 완료!")
+    print(f"   - 컴포넌트 개수: {len([m for m in mapped if m['class'] != 'VoltageSource'])}")
+    print(f"   - 전원 개수: {len(stable_power_pairs)}")
+    
+    return mapped, stable_hole_to_net
 
+
+def stabilize_input_data(all_comps, wires, power_pairs, hole_to_net):
+    """
+    모든 입력 데이터를 안정화
+    """
+    print("  📊 입력 데이터 안정화 중...")
+    
+    # 컴포넌트 안정화 (다중 키 정렬)
+    def comp_key(comp):
+        return (
+            comp.get('class', ''),
+            str(comp.get('value', 0)),
+            tuple(sorted(comp.get('pins', []))),
+            str(comp)
+        )
+    
+    stable_comps = sorted(all_comps, key=comp_key)
+    
+    # 와이어 안정화 (net 번호 순)
+    stable_wires = []
+    for net1, net2 in wires:
+        stable_wires.append((min(net1, net2), max(net1, net2)))
+    stable_wires = sorted(set(stable_wires))
+    
+    # 전원 안정화 (net 번호 순)
+    stable_powers = []
+    if power_pairs:
+        for net_p, x_p, net_m, x_m in power_pairs:
+            stable_powers.append((net_p, x_p, net_m, x_m))
+        stable_powers.sort(key=lambda x: (min(x[0], x[2]), max(x[0], x[2])))
+    
+    # hole_to_net 안정화 (키 정렬)
+    stable_hole_to_net = dict(sorted(hole_to_net.items()))
+    
+    print(f"     안정화 완료: 컴포넌트 {len(stable_comps)}, 와이어 {len(stable_wires)}, 전원 {len(stable_powers)}")
+    
+    return {
+        'components': stable_comps,
+        'wires': stable_wires,
+        'power_pairs': stable_powers,
+        'hole_to_net': stable_hole_to_net
+    }
+
+def perform_stable_net_merging(stable_wires, stable_hole_to_net):
+    """
+    안정화된 Union-Find로 넷 병합 (디버깅 강화)
+    """
+    print("  🔗 안정화된 넷 병합 중...")
+    
+    all_nets = sorted(set(stable_hole_to_net.values()))
+    parent = {net: net for net in all_nets}
+    
     def find(u):
         if parent[u] != u:
             parent[u] = find(parent[u])
         return parent[u]
-
+    
     def union(u, v):
         pu, pv = find(u), find(v)
         if pu != pv:
-            parent[pv] = pu
-
-    print("=== Wire Connections (Net Unions) ===")
-    for net1, net2 in wires:
-        print(f"Union: {net1} <--> {net2}")
+            # 항상 작은 번호를 루트로 설정 (일관성)
+            if pu < pv:
+                parent[pv] = pu
+                print(f"    Union: {u}({pu}) ← {v}({pv}) → 대표넷: {pu}")
+            else:
+                parent[pu] = pv
+                print(f"    Union: {u}({pu}) → {v}({pv}) ← 대표넷: {pv}")
+        else:
+            print(f"    Union: {u}, {v} 이미 같은 그룹 (대표넷: {pu})")
+    
+    print("=== 넷 병합 과정 ===")
+    print(f"초기 넷: {sorted(all_nets)}")
+    
+    for net1, net2 in stable_wires:
+        print(f"Wire: {net1} <--> {net2}")
         union(net1, net2)
+    
+    # 최종 병합 결과 출력
+    print("\n=== 최종 병합 결과 ===")
+    groups = {}
+    for net in all_nets:
+        root = find(net)
+        groups.setdefault(root, []).append(net)
+    
+    for root, members in sorted(groups.items()):
+        if len(members) > 1:
+            print(f"그룹 {root}: {sorted(members)} (병합됨)")
+        else:
+            print(f"그룹 {root}: {members} (단독)")
+    
+    return {'parent': parent, 'find': find, 'groups': groups}
 
-    # 2) 전원 net 매핑
-    mapped_powers = []
-    for raw_np, x_np, raw_nm, x_nm in power_pairs or []:
-        mapped_powers.append((find(raw_np), x_np, find(raw_nm), x_nm))
-    power_pairs = mapped_powers
 
-    # 3) 컴포넌트 필터링 및 매핑
-    comps = [c for c in all_comps if c['class'] != 'Line_area']
-    mapped = []
-    for idx, comp in enumerate(comps, start=1):
-        # ① 핀 정보가 정확히 2개인지 체크
+def create_stable_component_mapping(stable_comps, stable_powers, voltage, merged_nets, stable_hole_to_net):
+    """
+    전류 흐름 순서 기반 안정화된 컴포넌트 매핑 (넷 병합 완전 적용)
+    """
+    print("  ⚡ 전류 흐름 기반 컴포넌트 매핑 중 (넷 병합 적용)...")
+    
+    find_net = merged_nets['find']
+    
+    def nearest_net(pt):
+        if not stable_hole_to_net:
+            return 0
+        x, y = pt
+        closest = min(stable_hole_to_net.keys(), key=lambda h: (h[0] - x) ** 2 + (h[1] - y) ** 2)
+        original_net = stable_hole_to_net[closest]
+        merged_net = find_net(original_net)
+        print(f"    핀 {pt} → 홀 {closest} → 원래넷 {original_net} → 병합넷 {merged_net}")
+        return merged_net
+    
+    # 🔋 1) 전압원들 먼저 매핑
+    voltage_components = []
+    for i, (net_p, x_p, net_m, x_m) in enumerate(stable_powers, start=1):
+        # 🔧 핵심: 전압원도 병합된 넷 사용
+        mapped_net_p = find_net(net_p)
+        mapped_net_m = find_net(net_m)
+        
+        print(f"  전압원 V{i}: 원래 ({net_p}, {net_m}) → 병합 ({mapped_net_p}, {mapped_net_m})")
+        
+        # 노드 정렬 (일관성)
+        node1, node2 = sorted([mapped_net_p, mapped_net_m])
+        
+        vs_comp = {
+            'name': f"V{i}",
+            'class': 'VoltageSource',
+            'value': voltage,
+            'nodes': (node1, node2),
+            'original_nets': (net_p, net_m),  # 디버깅용
+            'merged_nets': (mapped_net_p, mapped_net_m)  # 디버깅용
+        }
+        voltage_components.append(vs_comp)
+    
+    # 🔧 2) 일반 컴포넌트들 매핑 (병합된 넷 사용)
+    regular_components = []
+    regular_comps = [c for c in stable_comps if c.get('class') != 'Line_area']
+    
+    for idx, comp in enumerate(regular_comps, start=1):
         pins = comp.get('pins', [])
         if len(pins) != 2:
-            # 잘못된 핀 개수는 건너뛰거나, 로그를 남기고 다음 컴포넌트로
-            print(f"[경고] 컴포넌트 #{idx}({comp['class']}) 핀 개수 오류: {pins}")
+            print(f"[건너뜀] {comp.get('class', 'Unknown')} 핀 오류: {pins}")
             continue
-        pin_a, pin_b = pins
-
-        def nearest_net(pt):
-            x, y = pt
-            closest = min(hole_to_net.keys(), key=lambda h: (h[0] - x) ** 2 + (h[1] - y) ** 2)
-            return find(hole_to_net[closest])
-
-        node1 = nearest_net(pin_a)
-        node2 = nearest_net(pin_b)
-        prefix = {'Resistor': 'R', 'Diode': 'D', 'LED': 'L', 'Capacitor': 'C', 'IC': 'U','VoltageSource': 'V', 'V+': 'V','V-': 'V'}.get(comp['class'], 'X')
-        name = f"{prefix}{idx}"
-        mapped.append({
-            'name': name,
-            'class': comp['class'],
-            'value': comp['value'],
-            'nodes': (node1, node2)
-        })
-
-    print("=== Component to Net Mapping ===")
-    for comp in mapped:
-        print(f"{comp['name']} ({comp['class']}): Net1={comp['nodes'][0]}, Net2={comp['nodes'][1]}")
-
-    # 🔧 4) 다중 전원 소스 추가 (수정된 부분)
-    print("=== Adding Multiple Power Sources ===")
-    for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs, start=1):
-        vs_name = f"V{i}"
         
-        # 각 전원마다 개별 전압 설정 가능하도록 확장
-        # 현재는 대표 전압(voltage)을 모든 전원에 적용
-        # 필요시 power_pairs에 전압 정보도 포함하도록 확장 가능
-        vs_comp = {
-            'name': vs_name,
-            'class': 'VoltageSource',
-            'value': voltage,  # 향후 개별 전압으로 확장 가능
-            'nodes': (net_p, net_m)
+        # 핀 좌표 정렬
+        pin_a, pin_b = sorted(pins)
+        
+        # 🔧 핵심: 병합된 넷 사용
+        original_node1 = nearest_net(pin_a)
+        original_node2 = nearest_net(pin_b)
+        
+        # 이미 find_net()이 적용된 결과이므로 그대로 사용
+        node1, node2 = sorted([original_node1, original_node2])
+        
+        # 컴포넌트 이름 생성
+        prefix_map = {
+            'Resistor': 'R', 'Diode': 'D', 'LED': 'L', 
+            'Capacitor': 'C', 'IC': 'U'
         }
-        mapped.append(vs_comp)
-        print(f"{vs_name} (VoltageSource): Net1={net_p}, Net2={net_m}, Value={voltage}V")
+        prefix = prefix_map.get(comp.get('class', ''), 'X')
+        name = f"{prefix}{idx}"
+        
+        regular_comp = {
+            'name': name,
+            'class': comp.get('class', ''),
+            'value': comp.get('value', 0),
+            'nodes': (node1, node2),
+            'pins': pins  # 디버깅용
+        }
+        regular_components.append(regular_comp)
+        
+        print(f"  {name}: 핀 {pin_a},{pin_b} → 넷 ({node1}, {node2})")
+    
+    # ⚡ 3) 전류 흐름 순서로 재정렬
+    all_components = voltage_components + regular_components
+    flow_ordered = sort_by_current_flow(all_components)
+    
+    print("\n=== 넷 병합 적용된 최종 매핑 결과 ===")
+    for i, comp in enumerate(flow_ordered):
+        extra_info = ""
+        if 'original_nets' in comp:
+            extra_info = f" (원래: {comp['original_nets']})"
+        elif 'pins' in comp:
+            extra_info = f" (핀: {comp['pins']})"
+            
+        print(f"{i+1:2d}. {comp['name']:4s} ({comp['class']:12s}) "
+              f"[{comp['nodes'][0]:2d},{comp['nodes'][1]:2d}] = {comp['value']}{extra_info}")
+    
+    return flow_ordered
 
-    # 5) DataFrame 구성
+
+def sort_by_current_flow(components):
+    """
+    컴포넌트들을 전류 흐름 순서로 정렬
+    """
+    print("  🌊 전류 흐름 순서 계산 중...")
+    
+    # 전압원과 일반 컴포넌트 분리
+    voltage_sources = [c for c in components if c['class'] == 'VoltageSource']
+    other_components = [c for c in components if c['class'] != 'VoltageSource']
+    
+    if not voltage_sources:
+        # 전압원이 없으면 이름순 정렬
+        return sorted(other_components, key=lambda x: x['name'])
+    
+    # 전압원들 정렬 (이름순)
+    voltage_sources.sort(key=lambda x: x['name'])
+    
+    # 전류 흐름 그래프 구성
+    flow_graph = build_current_flow_graph(voltage_sources, other_components)
+    
+    # BFS로 전류 흐름 순서 계산
+    flow_order = calculate_flow_order_bfs(flow_graph, voltage_sources)
+    
+    return flow_order
+
+
+def build_current_flow_graph(voltage_sources, other_components):
+    """
+    전류 흐름 분석을 위한 그래프 구성
+    """
+    # net → components 매핑
+    net_to_comps = defaultdict(list)
+    all_comps = voltage_sources + other_components
+    
+    for comp in all_comps:
+        for net in comp['nodes']:
+            net_to_comps[net].append(comp)
+    
+    # 컴포넌트 간 연결 그래프
+    comp_graph = defaultdict(list)
+    for net, comps in net_to_comps.items():
+        for i in range(len(comps)):
+            for j in range(i + 1, len(comps)):
+                comp1, comp2 = comps[i], comps[j]
+                comp_graph[comp1['name']].append(comp2['name'])
+                comp_graph[comp2['name']].append(comp1['name'])
+    
+    return {
+        'net_to_comps': dict(net_to_comps),
+        'comp_graph': dict(comp_graph),
+        'all_components': {c['name']: c for c in all_comps}
+    }
+
+
+def calculate_flow_order_bfs(flow_graph, voltage_sources):
+    """
+    BFS로 전류 흐름 순서 계산
+    """
+    comp_graph = flow_graph['comp_graph']
+    all_components = flow_graph['all_components']
+    
+    # 전압원들을 시작점으로 BFS
+    queue = deque()
+    visited = set()
+    flow_order = []
+    
+    # 전압원들을 먼저 추가 (정렬된 순서로)
+    for vs in sorted(voltage_sources, key=lambda x: x['name']):
+        flow_order.append(vs)
+        visited.add(vs['name'])
+        
+        # 인접한 컴포넌트들을 큐에 추가
+        neighbors = sorted(comp_graph.get(vs['name'], []))
+        for neighbor in neighbors:
+            if neighbor not in visited:
+                queue.append((neighbor, 1))  # (component_name, distance)
+    
+    # BFS 실행
+    distance_groups = defaultdict(list)
+    
+    while queue:
+        comp_name, distance = queue.popleft()
+        
+        if comp_name in visited:
+            continue
+        
+        visited.add(comp_name)
+        component = all_components[comp_name]
+        distance_groups[distance].append(component)
+        
+        # 인접한 컴포넌트들을 다음 레벨에 추가
+        neighbors = sorted(comp_graph.get(comp_name, []))
+        for neighbor in neighbors:
+            if neighbor not in visited:
+                queue.append((neighbor, distance + 1))
+    
+    # 거리별로 정렬하여 추가
+    for distance in sorted(distance_groups.keys()):
+        group = distance_groups[distance]
+        # 같은 거리의 컴포넌트들은 이름순 정렬
+        group.sort(key=lambda x: (x['class'], x['name']))
+        flow_order.extend(group)
+    
+    # 연결되지 않은 컴포넌트들 마지막에 추가
+    all_names = set(all_components.keys())
+    visited_names = {c['name'] for c in flow_order}
+    unvisited = all_names - visited_names
+    
+    for name in sorted(unvisited):
+        flow_order.append(all_components[name])
+    
+    print(f"     전류 흐름 순서 계산 완료: {len(flow_order)}개 컴포넌트")
+    
+    return flow_order
+
+
+def generate_output_files22(mapped, stable_power_pairs, voltage, output_spice, output_img):
+    """
+    출력 파일들 생성
+    """
+    print("  📁 출력 파일 생성 중...")
+    
+    # DataFrame 생성
     df = pd.DataFrame([{
         'name': m['name'],
         'class': m['class'],
@@ -155,295 +1078,180 @@ def generate_circuit(
         'node1_n': m['nodes'][0],
         'node2_n': m['nodes'][1],
     } for m in mapped])
-
-    # 6) 그래프 저장
-    G = build_circuit_graph(mapped)
-    save_circuit_graph(G, output_img.replace('.jpg', '.graphml'))
-    write_graphml(G, output_img.replace('.jpg', '.graphml'))
-
-    # 7) SPICE 저장 (다중 전원 지원)
-    toSPICE_multi_power(df, power_pairs, voltage, output_spice)
-
-    # 8) 각 전원별 회로도 및 연결 그래프 시각화 (다중 전원 지원)
-    for i, (net_p, x_p, net_m, x_m) in enumerate(power_pairs, 1):
-        if i == 1:
-            path = output_img
-        else:
-            path = output_img.replace('.jpg', f'_pwr{i}.jpg')
-        
-        # ✅ 연결성 검증 추가
-        connectivity_report = validate_circuit_connectivity(G)
-        
-        if not connectivity_report['is_connected']:
-            print(f"\n🚨 전원 {i} 회로 연결성 문제:")
-            for issue in connectivity_report['issues']:
-                print(f"  - {issue}")
-            
-            # 연결되지 않은 경우 상세 정보 출력
-            print("연결된 그룹:")
-            for j, group in enumerate(connectivity_report['groups']):
-                comp_names = [comp['name'] for comp in group]
-                print(f"  그룹 {j+1}: {comp_names}")
-        
-        # ✅ 연결 그래프 생성
-        try:
-            from diagram import draw_connectivity_graph_from_nx
-            draw_connectivity_graph_from_nx(G, output_path=path.replace('.jpg', '_graph.png'))
-        except Exception as e:
-            print(f"연결성 그래프 생성 실패 (전원 {i}): {e}")
-        
-        # ✅ 회로도 생성 (다중 전원 지원)
-        try:
-            from diagram import drawDiagramFromGraph_with_connectivity_check
-            print(f"전원 {i} 회로도 생성 중...")
-            
-            # power_pairs 리스트를 G.graph에 저장
-            G.graph['power_pairs'] = power_pairs
-            G.graph['current_power_index'] = i - 1  # 현재 그리는 전원의 인덱스
-            
-            d = drawDiagramFromGraph_with_connectivity_check(G, voltage)
-            
-            if d:
-                try:
-                    d.draw()
-                    d.save(path)
-                    
-                    # 연결성 문제가 있으면 파일명에 표시
-                    if not connectivity_report['is_connected']:
-                        disconnected_path = path.replace('.jpg', '_DISCONNECTED.jpg')
-                        d.save(disconnected_path)
-                        print(f"⚠️  연결 끊어진 회로도 저장: {disconnected_path}")
-                    else:
-                        print(f"✅ 전원 {i} 회로도 저장: {path}")
-                    
-                except Exception as save_error:
-                    print(f"전원 {i} 회로도 저장 실패: {save_error}")
-            else:
-                print(f"❌ 전원 {i} 회로도 생성 실패")
-                
-        except Exception as diagram_error:
-            print(f"전원 {i} 회로도 생성 오류: {diagram_error}")
     
-    # 9) 비교 (다중 전원 고려)
+    # 안정화된 그래프 생성
+    G = build_stable_circuit_graph(mapped)
+    
+    # 파일들 저장
+    save_circuit_graph(G, output_img.replace('.jpg', '.graphml'))
+    toSPICE_multi_power(df, stable_power_pairs, voltage, output_spice)
+    
+    # 회로도 생성 시도
+    try:
+        generate_circuit_diagrams(G, voltage, output_img, stable_power_pairs)
+    except Exception as e:
+        print(f"  ⚠️ 회로도 생성 실패: {e}")
+    
+    # 비교 분석
     try:
         compare_and_notify(G, output_img, checker_dir="checker")
     except Exception as e:
-        print(f"[오류] 회로 비교 실패: {e}")
+        print(f"  ⚠️ 회로 비교 실패: {e}")
+
+
+def build_stable_circuit_graph(mapped):
+    """
+    안정화된 회로 그래프 생성
+    """
+    G = nx.Graph()
     
-    print(f"\n✅ 다중 전원 회로 생성 완료!")
-    print(f"   - 총 전원 개수: {len(power_pairs)}")
-    print(f"   - 컴포넌트 개수: {len([m for m in mapped if m['class'] != 'VoltageSource'])}")
+    # 노드를 flow order 순서로 추가
+    for i, comp in enumerate(mapped):
+        n1, n2 = comp['nodes']
+        nets_str = f"{min(n1, n2)},{max(n1, n2)}"
+        
+        G.add_node(comp['name'],
+                   comp_class=comp['class'],
+                   value=comp['value'],
+                   nets=nets_str,
+                   flow_order=i,
+                   is_voltage_source=(comp['class'] == 'VoltageSource'))
+    
+    # net 기반 엣지 생성
+    net_to_comps = defaultdict(list)
+    for comp in mapped:
+        for net in comp['nodes']:
+            net_to_comps[net].append(comp['name'])
+    
+    # 안정화된 엣지 추가
+    for net in sorted(net_to_comps.keys()):
+        clist = sorted(net_to_comps[net])
+        
+        for i in range(len(clist)):
+            for j in range(i + 1, len(clist)):
+                u, v = sorted([clist[i], clist[j]])  # 사전순 정렬
+                
+                if G.has_edge(u, v):
+                    prev_nets = G[u][v]['nets'].split(',')
+                    all_nets = sorted(set(prev_nets + [str(net)]), key=int)
+                    G[u][v]['nets'] = ','.join(all_nets)
+                else:
+                    G.add_edge(u, v, nets=str(net))
+    
+    return G
 
-    return mapped, hole_to_net
+
+def generate_circuit_diagrams(G, voltage, output_img, power_pairs):
+    """
+    회로도 생성 (기존 코드 활용)
+    """
+    # 🔧 8) 단일 회로도에 모든 전원 표시
+    print("=== 모든 전원을 포함한 단일 회로도 생성 ===")
+
+    # current_power_index 제거 (핵심!)
+    if 'current_power_index' in G.graph:
+        del G.graph['current_power_index']
+
+    # 모든 전원 정보 저장
+    G.graph['power_pairs'] = power_pairs
+    G.graph['voltage'] = voltage
+
+    # 연결성 검증
+    connectivity_report = validate_circuit_connectivity(G)
+
+    # 통합 회로도 생성
+    try:
+        from diagram import drawDiagramFromGraph_with_connectivity_check
+        d = drawDiagramFromGraph_with_connectivity_check(G, voltage)
+        
+        if d:
+            d.draw()
+            d.save(output_img)
+            print(f"✅ {len(power_pairs)}개 전원 통합 회로도 저장: {output_img}")
+        else:
+            print("❌ 회로도 생성 실패")
+            
+    except Exception as e:
+        print(f"❌ 회로도 생성 오류: {e}")
 
 
+# 기존 함수들 (호환성 유지)
 def toSPICE_multi_power(df, power_pairs, default_voltage, output_file):
     """
-    다중 전원을 지원하는 SPICE 넷리스트 생성
+    다중 전원 SPICE 넷리스트 생성 (병합된 넷 번호 사용)
     """
+    print(f"\n📝 SPICE 넷리스트 생성: {output_file}")
+    
     with open(output_file, 'w') as f:
         f.write("* Multi-Power Circuit Netlist\n")
         f.write(f"* Generated with {len(power_pairs)} power sources\n")
         f.write("* \n")
         
-        # 전압원들 먼저 출력
+        # 전압원들 (병합된 넷 번호 사용)
         for i, (net_p, _, net_m, _) in enumerate(power_pairs, 1):
             f.write(f"V{i} {net_p} {net_m} {default_voltage}\n")
+            print(f"  전압원 V{i}: Net{net_p} ↔ Net{net_m} ({default_voltage}V)")
         
-        # 다른 컴포넌트들 출력
+        # 일반 컴포넌트들 (DataFrame에 이미 병합된 넷 번호 저장됨)
         for _, row in df.iterrows():
             if row['class'] == 'VoltageSource':
-                continue  # 이미 위에서 처리함
+                continue
             elif row['class'] == 'Resistor':
                 f.write(f"{row['name']} {row['node1_n']} {row['node2_n']} {row['value']}\n")
+                print(f"  저항 {row['name']}: Net{row['node1_n']} ↔ Net{row['node2_n']} ({row['value']}Ω)")
             elif row['class'] == 'Capacitor':
                 f.write(f"{row['name']} {row['node1_n']} {row['node2_n']} {row['value']}F\n")
+                print(f"  캐패시터 {row['name']}: Net{row['node1_n']} ↔ Net{row['node2_n']} ({row['value']}F)")
             elif row['class'] == 'Diode':
                 f.write(f"{row['name']} {row['node1_n']} {row['node2_n']} DMOD\n")
+                print(f"  다이오드 {row['name']}: Net{row['node1_n']} ↔ Net{row['node2_n']}")
             elif row['class'] == 'LED':
                 f.write(f"{row['name']} {row['node1_n']} {row['node2_n']} LEDMOD\n")
+                print(f"  LED {row['name']}: Net{row['node1_n']} ↔ Net{row['node2_n']}")
         
         f.write("* \n")
         f.write(".MODEL DMOD D\n")
         f.write(".MODEL LEDMOD D(IS=1E-12 N=2)\n")
         f.write(".END\n")
     
-    print(f"✅ 다중 전원 SPICE 파일 저장: {output_file}")
+    print(f"✅ SPICE 파일 저장 완료: {output_file}")
 
+def debug_net_mapping_process(stable_hole_to_net, stable_wires, mapped_components):
+    """
+    넷 매핑 과정 디버깅 함수
+    """
+    print("\n" + "="*60)
+    print("🔍 넷 매핑 과정 디버깅")
+    print("="*60)
+    
+    print("1️⃣ 홀-넷 매핑:")
+    for hole, net in sorted(stable_hole_to_net.items()):
+        print(f"  홀 {hole} → Net{net}")
+    
+    print("\n2️⃣ 와이어 연결:")
+    for net1, net2 in stable_wires:
+        print(f"  Wire: Net{net1} ↔ Net{net2}")
+    
+    print("\n3️⃣ 최종 컴포넌트 넷:")
+    for comp in mapped_components:
+        node1, node2 = comp['nodes']
+        print(f"  {comp['name']}: Net{node1} ↔ Net{node2}")
+    
+    print("="*60)
 
-# 기존 toSPICE 함수를 위한 래퍼 (호환성 유지)
 def toSPICE(df, voltage, output_file):
-    """기존 인터페이스 호환성을 위한 래퍼"""
-    # 단일 전원으로 가정하고 power_pairs 생성
-    power_pairs = [(1, 0, 0, 0)]  # 기본값
+    """기존 인터페이스 호환성 래퍼"""
+    power_pairs = [(1, 0, 0, 0)]
     toSPICE_multi_power(df, power_pairs, voltage, output_file)
 
-def draw_connectivity_graph_from_nx_with_issues(G, connectivity_report, output_path=None):
-    """
-    연결성 문제를 시각적으로 표시하는 연결 그래프
-    """
-    import matplotlib.pyplot as plt
-    import networkx as nx
-    import numpy as np
-    
-    # 기본 그래프 그리기
-    pos = nx.spring_layout(G, seed=42, k=1.5, iterations=50)
-    
-    # 연결된 그룹별로 색상 지정
-    group_colors = plt.cm.Set3(np.linspace(0, 1, len(connectivity_report['groups'])))
-    
-    node_colors = []
-    node_to_group = {}
-    
-    # 각 노드를 해당 그룹 색상으로 매핑
-    for group_idx, group in enumerate(connectivity_report['groups']):
-        for comp in group:
-            node_to_group[comp['name']] = group_idx
-    
-    # 전압원 처리
-    voltage_nodes = [node for node, data in G.nodes(data=True) 
-                    if data.get('comp_class') == 'VoltageSource']
-    
-    for node in G.nodes():
-        if node in voltage_nodes:
-            node_colors.append('gray')  # 전압원 색깔은 빨간색(회색으로 설정함)
-        elif node in node_to_group:
-            group_idx = node_to_group[node]
-            node_colors.append(group_colors[group_idx])
-        else:
-            node_colors.append('gray')  # 미분류는 회색
-    
-    plt.figure(figsize=(12, 8))
-    
-    # 연결되지 않은 경우 제목에 경고 표시
-    if not connectivity_report['is_connected']:
-        title = f"🚨 연결 끊어진 회로 - {connectivity_report['num_groups']}개 그룹"
-        title_color = 'red'
-    else:
-        title = "✅ 연결된 회로"
-        title_color = 'green'
-    
-    plt.suptitle(title, fontsize=16, color=title_color, weight='bold')
-    
-    # 노드 그리기 (연결 상태에 따라 테두리 스타일 변경)
-    if connectivity_report['is_connected']:
-        edge_style = 'solid'
-        linewidth = 1.5
-    else:
-        edge_style = 'dashed'
-        linewidth = 2.0
-    
-    nx.draw_networkx_nodes(G, pos, node_color=node_colors, 
-                          node_size=1500, alpha=0.9, 
-                          edgecolors='black', linewidths=linewidth)
-    
-    # 엣지 그리기 (끊어진 회로는 점선)
-    edge_style = '--' if not connectivity_report['is_connected'] else '-'
-    nx.draw_networkx_edges(G, pos, edge_color='#7F8C8D', 
-                          width=2, alpha=0.7, style=edge_style)
-    
-    # 라벨 그리기
-    node_labels = {}
-    for node, data in G.nodes(data=True):
-        label = str(node)
-        if 'value' in data and data['value'] != 0:
-            comp_type = data.get('comp_class', '')
-            if comp_type == 'Resistor':
-                label += f"\n{data['value']}Ω"
-            elif comp_type == 'VoltageSource':
-                label += f"\n{data['value']}V"
-        node_labels[node] = label
-    
-    nx.draw_networkx_labels(G, pos, labels=node_labels, 
-                           font_size=9, font_weight='bold')
-    
-    # 범례 추가 (그룹별)
-    legend_elements = []
-    for i, group in enumerate(connectivity_report['groups']):
-        group_size = len(group)
-        legend_elements.append(
-            plt.Line2D([0], [0], marker='o', color='w', 
-                      markerfacecolor=group_colors[i],
-                      markersize=10, 
-                      label=f"그룹 {i+1} ({group_size}개 컴포넌트)")
-        )
-    
-    if voltage_nodes:
-        legend_elements.append(
-            plt.Line2D([0], [0], marker='o', color='w', 
-                      markerfacecolor='black',
-                      markersize=10, label="전압원")
-        )
-    
-    plt.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1, 1))
-    
-    # 하단에 문제점 표시
-    if connectivity_report['issues']:
-        issues_text = "문제점:\n" + "\n".join(f"• {issue}" for issue in connectivity_report['issues'])
-        plt.figtext(0.02, 0.02, issues_text, fontsize=10, color='red', 
-                   bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow"))
-    
-    plt.axis('off')
-    plt.tight_layout()
-    
-    if output_path:
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-        print(f"연결성 그래프 저장: {output_path}")
-    
-    #plt.show()
-    return plt.gcf()
-
-
-def build_circuit_graph(mapped_comps):
-
-    G = nx.Graph()
-
-    
-    # 1) 노드 추가 (nets 튜플 → 문자열)
-    for comp in mapped_comps:
-        n1, n2 = comp['nodes']
-        nets_str = f"{n1},{n2}"
-
-        # V+/V- 이름 변환 로직
-        cls = comp['class']
-        if cls == 'VoltageSource':
-            if comp.get('value', 0) > 0:
-                cls = 'V+'
-            elif comp.get('value', 0) == 0:
-                cls = 'V-'
-
-
-        #nets_str = ','.join(map(str, comp['nodes']))
-        G.add_node(comp['name'],
-                   comp_class=comp['class'],
-                   value=comp['value'],
-                   nets=nets_str)   # tuple → "1,2" 식 문자열
-
-    # 2) net → 컴포넌트 역색인
-    net_to_comps = {}
-    for comp in mapped_comps:
-        for net in comp['nodes']:
-            net_to_comps.setdefault(net, []).append(comp['name'])
-
-    # 3) 같은 net에 묶인 컴포넌트들끼리 엣지 추가 (nets set → 문자열)
-    for net, clist in net_to_comps.items():
-        for i in range(len(clist)):
-            for j in range(i+1, len(clist)):
-                u, v = clist[i], clist[j]
-                if G.has_edge(u, v):
-                    # 이미 있으면 기존 문자열 뒤에 추가
-                    prev = G[u][v]['nets']
-                    G[u][v]['nets'] = f"{prev},{net}"
-                else:
-                    G.add_edge(u, v, nets=str(net))
-
-    return G
 
 def save_circuit_graph(G, path_graphml):
-    # GraphML로 저장
+    """그래프 저장"""
     write_graphml(G, path_graphml)
 
+
 def visualize_circuit_graph(G, out_path='circuit_graph.png'):
+    """그래프 시각화 (기존과 동일)"""
     pos = nx.spring_layout(G, seed=42)
     plt.figure(figsize=(6,6))
     nx.draw_networkx_nodes(G, pos, node_color='lightblue', node_size=800, edgecolors='black')
@@ -459,13 +1267,12 @@ def visualize_circuit_graph(G, out_path='circuit_graph.png'):
     print(f"Circuit graph saved to {out_path}")
 
 
-# 예시 사용법:
+# 메인 실행부 (기존과 동일)
 if __name__ == "__main__":
-    # mapped 리스트는 generate_circuit 내부에서 만든 것과 동일한 형태
     mapped = [
         {"name":"R1","class":"Resistor","value":100,"nodes":(1,2)},
         {"name":"C1","class":"Capacitor","value":0.001,"nodes":(2,3)},
         {"name":"LED1","class":"LED","value":0,"nodes":(3,0)}
     ]
-    G = build_circuit_graph(mapped)
+    G = build_stable_circuit_graph(mapped)
     visualize_circuit_graph(G)

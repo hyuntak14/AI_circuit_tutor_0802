@@ -1,38 +1,54 @@
 <?xml version='1.0' encoding='utf-8'?>
-<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d3" for="edge" attr.name="nets" attr.type="string"/>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d5" for="edge" attr.name="nets" attr.type="string"/>
+<key id="d4" for="node" attr.name="is_voltage_source" attr.type="boolean"/>
+<key id="d3" for="node" attr.name="flow_order" attr.type="long"/>
 <key id="d2" for="node" attr.name="nets" attr.type="string"/>
 <key id="d1" for="node" attr.name="value" attr.type="double"/>
 <key id="d0" for="node" attr.name="comp_class" attr.type="string"/>
-<graph edgedefault="undirected"><node id="R1">
+<graph edgedefault="undirected"><node id="V1">
+  <data key="d0">VoltageSource</data>
+  <data key="d1">5.0</data>
+  <data key="d2">9,185</data>
+  <data key="d3">0</data>
+  <data key="d4">True</data>
+</node>
+<node id="R1">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">174,169</data>
+  <data key="d2">9,180</data>
+  <data key="d3">1</data>
+  <data key="d4">False</data>
 </node>
 <node id="R2">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">6,174</data>
+  <data key="d2">180,185</data>
+  <data key="d3">2</data>
+  <data key="d4">False</data>
 </node>
 <node id="R3">
   <data key="d0">Resistor</data>
   <data key="d1">100.0</data>
-  <data key="d2">169,167</data>
+  <data key="d2">9,180</data>
+  <data key="d3">3</data>
+  <data key="d4">False</data>
 </node>
-<node id="V1">
-  <data key="d0">VoltageSource</data>
-  <data key="d1">5.0</data>
-  <data key="d2">6,167</data>
-</node>
-<edge source="R1" target="R2">
-  <data key="d3">174</data>
+<edge source="V1" target="R1">
+  <data key="d5">9</data>
+</edge>
+<edge source="V1" target="R3">
+  <data key="d5">9</data>
+</edge>
+<edge source="V1" target="R2">
+  <data key="d5">185</data>
 </edge>
 <edge source="R1" target="R3">
-  <data key="d3">169</data>
+  <data key="d5">9,180</data>
 </edge>
-<edge source="R2" target="V1">
-  <data key="d3">6</data>
+<edge source="R1" target="R2">
+  <data key="d5">180</data>
 </edge>
-<edge source="R3" target="V1">
-  <data key="d3">167</data>
+<edge source="R2" target="R3">
+  <data key="d5">180</data>
 </edge>
 </graph></graphml>

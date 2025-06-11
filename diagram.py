@@ -1516,3 +1516,281 @@ if __name__=='__main__':
         print(f"Saved: {args.output}")
     else:
         print("Failed to generate diagram")
+
+    # diagram.py에 추가할 간단한 다중 전원 처리 함수
+
+def drawDiagramFromGraph_simple_multi_power(G, voltage=5.0):
+    """
+    간단한 다중 전원 회로도 생성 (GUI 오류 방지)
+    """
+    try:
+        # matplotlib 백엔드를 Agg로 설정 (GUI 오류 방지)
+        import matplotlib
+        matplotlib.use('Agg')
+        
+        import schemdraw
+        import schemdraw.elements as e
+        
+        print("🎨 다중 전원 회로도 그리기 시작...")
+        
+        # 회로 토폴로지 분석
+        circuit_levels = analyze_circuit_topology_fixed(G)
+        
+        if not circuit_levels:
+            print("❌ 그릴 수 있는 회로 요소가 없습니다.")
+            return create_fallback_diagram(G, voltage)
+        
+        # 전압원 정보 수집
+        voltage_sources = []
+        other_components = []
+        
+        for node, data in G.nodes(data=True):
+            if data.get('comp_class') == 'VoltageSource':
+                voltage_sources.append({
+                    'name': node,
+                    'voltage': data.get('value', voltage),
+                    'nets': data.get('nets', '')
+                })
+            else:
+                other_components.append({
+                    'name': node,
+                    'class': data.get('comp_class'),
+                    'value': data.get('value', 0)
+                })
+        
+        print(f"📊 발견된 전압원: {len(voltage_sources)}개")
+        for vs in voltage_sources:
+            print(f"  - {vs['name']}: {vs['voltage']}V")
+        
+        # Drawing 생성
+        d = schemdraw.Drawing()
+        d.config(unit=3.0, fontsize=12)
+        
+        # 제목 (다중 전원 표시)
+        if len(voltage_sources) > 1:
+            title = f"Multi-Source Circuit ({len(voltage_sources)} sources)"
+            d += e.Label().label(title).color('blue').at((0, 2))
+        
+        d.push()
+        
+        # 회로 레벨별로 컴포넌트 그리기
+        for level_idx, level in enumerate(circuit_levels):
+            level_size = len(level)
+            
+            if level_size == 1:
+                # 단일 컴포넌트
+                comp = level[0]
+                element = get_component_element(comp)
+                d += element
+                
+            elif level_size == 2:
+                # 병렬 컴포넌트 2개
+                d += e.Line().right(d.unit/3)
+                d.push()
+                
+                # 위쪽 브랜치
+                d += e.Line().up(d.unit/2)
+                element1 = get_component_element(level[0])
+                d += element1
+                d += e.Line().down(d.unit/2)
+                d.pop()
+                
+                # 아래쪽 브랜치
+                d += e.Line().down(d.unit/2)
+                element2 = get_component_element(level[1])
+                d += element2
+                d += e.Line().up(d.unit/2)
+                
+                d += e.Line().right(d.unit/3)
+                
+            else:
+                # 다중 병렬 컴포넌트
+                d += e.Line().right(d.unit/4)
+                d.push()
+                
+                spacing = 0.8
+                for i, comp in enumerate(level):
+                    if i > 0:
+                        d.pop()
+                        d.push()
+                    
+                    vertical_offset = (i - (level_size-1)/2) * spacing
+                    
+                    if vertical_offset != 0:
+                        d += e.Line().up(vertical_offset * d.unit)
+                    
+                    element = get_component_element(comp)
+                    d += element
+                    
+                    if vertical_offset != 0:
+                        d += e.Line().down(vertical_offset * d.unit)
+                
+                d.pop()
+                d += e.Line().right(d.unit/4)
+        
+        # 🔧 다중 전원 표시
+        if voltage_sources:
+            # 메인 연결점
+            d += (n1 := e.Dot())
+            d += e.Line().down().at(n1.end)
+            d += (n2 := e.Dot())
+            d.pop()
+            d += (n3 := e.Dot())
+            
+            if len(voltage_sources) == 1:
+                # 단일 전원
+                vs = voltage_sources[0]
+                d += e.SourceV().down().label(f"{vs['name']}\n{vs['voltage']}V").at(n3.end).reverse()
+            else:
+                # 다중 전원 - 첫 번째 전원을 메인으로
+                main_vs = voltage_sources[0]
+                d += e.SourceV().down().label(f"{main_vs['name']}\n{main_vs['voltage']}V").at(n3.end).reverse().color('red')
+                
+                # 추가 전원들을 옆에 표시
+                for i, vs in enumerate(voltage_sources[1:], 1):
+                    offset_x = 1.5 * i
+                    offset_y = -0.5 * i
+                    
+                    d.push()
+                    d += e.Line().right(offset_x * d.unit).linewidth(0)
+                    d += e.Line().down(offset_y * d.unit).linewidth(0)
+                    d += e.SourceV().down().label(f"{vs['name']}\n{vs['voltage']}V").scale(0.8).color('blue')
+                    d.pop()
+            
+            # 회로 닫기
+            d += (n4 := e.Dot())
+            d += e.Line().right().endpoints(n4.end, n2.end)
+            
+            # 다중 전원 설명
+            if len(voltage_sources) > 1:
+                info_text = f"Note: {len(voltage_sources)} voltage sources in circuit"
+                d += e.Label().label(info_text).color('gray').at((0, -3))
+        
+        return d
+        
+    except Exception as e:
+        print(f"⚠️ 회로도 생성 오류: {e}")
+        return create_fallback_diagram(G, voltage)
+
+
+def create_fallback_diagram(G, voltage):
+    """
+    오류 발생 시 대안 다이어그램 생성
+    """
+    try:
+        import schemdraw
+        import schemdraw.elements as e
+        
+        d = schemdraw.Drawing()
+        d.config(unit=3.0, fontsize=12)
+        
+        # 간단한 회로도
+        d += e.Label().label("Multi-Source Circuit").color('blue').at((0, 1))
+        
+        # 전압원들 표시
+        voltage_sources = [node for node, data in G.nodes(data=True) 
+                          if data.get('comp_class') == 'VoltageSource']
+        
+        for i, vs_name in enumerate(voltage_sources):
+            vs_data = G.nodes[vs_name]
+            vs_voltage = vs_data.get('value', voltage)
+            
+            if i == 0:
+                d += e.SourceV().down().label(f"{vs_name}\n{vs_voltage}V").color('red')
+            else:
+                d.push()
+                d += e.Line().right((i+1) * d.unit)
+                d += e.SourceV().down().label(f"{vs_name}\n{vs_voltage}V").color('blue')
+                d.pop()
+        
+        # 저항들 표시
+        resistors = [node for node, data in G.nodes(data=True) 
+                    if data.get('comp_class') == 'Resistor']
+        
+        for resistor_name in resistors:
+            r_data = G.nodes[resistor_name]
+            r_value = r_data.get('value', 100)
+            d += e.Resistor().right().label(f"{resistor_name}\n{r_value}Ω")
+        
+        return d
+        
+    except Exception as e:
+        print(f"⚠️ 대안 다이어그램 생성도 실패: {e}")
+        return None
+
+
+# circuit_generator.py의 generate_circuit 함수에서 호출하는 부분 수정
+def generate_individual_circuit_diagram(G, power_pairs, voltage, output_path):
+    """
+    개별 회로도 생성 (GUI 오류 방지)
+    """
+    try:
+        # 간단한 다중 전원 다이어그램 생성
+        d = drawDiagramFromGraph_simple_multi_power(G, voltage)
+        
+        if d:
+            d.draw()
+            d.save(output_path)
+            print(f"✅ 다중 전원 회로도 저장: {output_path}")
+            return True
+        else:
+            print(f"❌ 회로도 생성 실패: {output_path}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ 회로도 생성 오류: {e}")
+        
+        # 최후의 수단: 텍스트 다이어그램
+        create_text_fallback_diagram(G, power_pairs, voltage, output_path)
+        return False
+
+
+def create_text_fallback_diagram(G, power_pairs, voltage, output_path):
+    """
+    텍스트 기반 대안 다이어그램
+    """
+    import cv2
+    import numpy as np
+    
+    img = np.ones((600, 800, 3), dtype=np.uint8) * 255
+    
+    # 제목
+    cv2.putText(img, "Multi-Source Circuit Diagram", (50, 50), 
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 2)
+    
+    y_pos = 100
+    
+    # 전압원들
+    voltage_sources = [node for node, data in G.nodes(data=True) 
+                      if data.get('comp_class') == 'VoltageSource']
+    
+    cv2.putText(img, f"Voltage Sources ({len(voltage_sources)}):", (50, y_pos), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
+    y_pos += 40
+    
+    for vs_name in voltage_sources:
+        vs_data = G.nodes[vs_name]
+        vs_voltage = vs_data.get('value', voltage)
+        text = f"  {vs_name}: {vs_voltage}V"
+        cv2.putText(img, text, (70, y_pos), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 1)
+        y_pos += 30
+    
+    # 다른 컴포넌트들
+    y_pos += 20
+    cv2.putText(img, "Other Components:", (50, y_pos), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    y_pos += 40
+    
+    for node, data in G.nodes(data=True):
+        if data.get('comp_class') != 'VoltageSource':
+            comp_class = data.get('comp_class', 'Unknown')
+            comp_value = data.get('value', 0)
+            unit = {'Resistor': 'Ω', 'Capacitor': 'F'}.get(comp_class, '')
+            text = f"  {node}: {comp_value}{unit}"
+            cv2.putText(img, text, (70, y_pos), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+            y_pos += 30
+    
+    cv2.imwrite(output_path, img)
+    print(f"📝 텍스트 다이어그램 저장: {output_path}")

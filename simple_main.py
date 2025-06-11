@@ -136,7 +136,7 @@ class SimpleCircuitConverter:
         component_pins = self.pin_manager.manual_pin_verification_and_correction(warped, component_pins, holes)
         
         # 6. 값 입력 (CircuitGeneratorManager 사용)
-        self.circuit_generator.quick_value_input(component_pins)
+        self.circuit_generator.quick_value_input(warped,component_pins)
         
         # 7. 다중 전원 선택 (수정된 CircuitGeneratorManager 사용)
         print("\n🔋 전원 설정 단계")
@@ -180,3 +180,4 @@ class SimpleCircuitConverter:
 if __name__ == "__main__":
     converter = SimpleCircuitConverter()
     converter.run()
+    
