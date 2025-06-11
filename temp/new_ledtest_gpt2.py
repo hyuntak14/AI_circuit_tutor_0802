@@ -614,8 +614,10 @@ if __name__ == "__main__":
         ]
         merged_lsd_lines = merge_similar_lines(filtered_lsd_lines,
                                        angle_thresh=math.radians(10),
-                                       dist_thresh=30)  # 추측입니다
+                                       dist_thresh=10)  # 추측입니다
+        merged_lsd_lines = filtered_lsd_lines
         lsd_endpoints = get_lsd_endpoints(filtered_lsd_lines)
+        
         
         edges = cv2.Canny(processed_morph, canny1, canny2)
         hough_lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=20,
@@ -628,7 +630,7 @@ if __name__ == "__main__":
                 hough_list.append((x1,y1,x2,y2))
         # 2) 비슷한 선분 병합
             merged_hough = merge_similar_lines(hough_list,
-                                            angle_thresh=math.radians(5),
+                                            angle_thresh=math.radians(10),
                                             dist_thresh=10)  # 필요에 따라 조정
         else:
             merged_hough = []
