@@ -9,6 +9,124 @@ except ImportError:
     print("Warning: sklearn not available. Using simple clustering instead.")
     print("For better results, install sklearn: pip install scikit-learn")
 
+def detect_led_body(img):
+    """LED 몸체 검출 (빨간색, 노란색, 초록색 기준)"""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # 빨간색 범위
+    red_mask1 = cv2.inRange(hsv, (0, 70, 50), (10, 255, 255))
+    red_mask2 = cv2.inRange(hsv, (170, 70, 50), (180, 255, 255))
+    red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+    
+    # 노란색 범위
+    yellow_mask = cv2.inRange(hsv, (20, 100, 100), (30, 255, 255))
+    
+    # 초록색 범위
+    green_mask = cv2.inRange(hsv, (40, 50, 50), (80, 255, 255))
+    
+    # 모든 색상 마스크 합치기
+    body_mask = cv2.bitwise_or(red_mask, cv2.bitwise_or(yellow_mask, green_mask))
+    
+    # 노이즈 제거 및 연결
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    body_mask = cv2.morphologyEx(body_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
+    body_mask = cv2.morphologyEx(body_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+    
+    # 컨투어 찾기
+    contours, _ = safe_find_contours(body_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        return None, None, None
+    
+    # 가장 큰 컨투어 선택
+    largest_contour = max(contours, key=cv2.contourArea)
+    
+    # Convex hull 계산
+    hull = cv2.convexHull(largest_contour)
+    
+    # 중심점 계산
+    M = cv2.moments(hull)
+    if M["m00"] != 0:
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
+        centroid = (cx, cy)
+    else:
+        centroid = None
+    
+    return hull, centroid, body_mask
+
+def cover_holes_excluding_led(binary_img, hole_centers, interpolated_points, led_hull, square_size):
+    """
+    LED 몸체 범위를 제외한 구멍 위치를 검은 정사각형으로 가림
+
+    Parameters:
+    - binary_img: 구멍 검출 이후의 이진 이미지
+    - hole_centers: detect_square_holes에서 반환된 구멍 중심 좌표 리스트
+    - interpolated_points: 보간된 구멍 좌표 리스트
+    - led_hull: detect_led_body에서 반환된 LED 몸체 convex hull
+    - square_size: 검은색 정사각형의 한 변 길이 (픽셀)
+    """
+    masked = binary_img.copy()
+    all_points = []
+    if hole_centers:
+        all_points.extend(hole_centers)
+    if interpolated_points:
+        all_points.extend(interpolated_points)
+
+    for (cx, cy) in all_points:
+        x_int, y_int = int(round(cx)), int(round(cy))
+        # LED 몸체 내부는 제외
+        if led_hull is not None and cv2.pointPolygonTest(led_hull, (x_int, y_int), False) >= 0:
+            continue
+        # 정사각형 좌표 계산
+        half = square_size // 2
+        x0 = max(x_int - half, 0)
+        y0 = max(y_int - half, 0)
+        x1 = min(x_int + half, masked.shape[1] - 1)
+        y1 = min(y_int + half, masked.shape[0] - 1)
+        # 해당 영역을 검은색으로 채움
+        cv2.rectangle(masked, (x0, y0), (x1, y1), 0, -1)
+    return masked
+
+
+def detect_led_holes_brightness(gray_img, hole_centers, hole_radius, thresh=150):
+    """
+    밝기 기반 임계치로 LED 리드가 꽂힌 구멍 판별
+    """
+    led_indices = []
+    for i, (cx, cy) in enumerate(hole_centers):
+        x, y = int(round(cx)), int(round(cy))
+        mask = np.zeros_like(gray_img, dtype=np.uint8)
+        cv2.circle(mask, (x, y), hole_radius, 255, -1)
+        mean_val = cv2.mean(gray_img, mask=mask)[0]
+        if mean_val > thresh:
+            led_indices.append(i)
+    return led_indices
+
+def detect_led_holes_by_lines(gray_img, hole_centers, hole_radius,
+                              canny_thresh1=50, canny_thresh2=150,
+                              hough_thresh=10, min_line_len=20):
+    """
+    에지 + 허프 변환으로 LED 리드(직선) 검출
+    """
+    led_indices = []
+    for i, (cx, cy) in enumerate(hole_centers):
+        x, y = int(round(cx)), int(round(cy))
+        r = hole_radius
+        h, w = gray_img.shape[:2]
+        x0, y0 = max(x-r,0), max(y-r,0)
+        x1, y1 = min(x+r, w), min(y+r, h)
+        roi = gray_img[y0:y1, x0:x1]
+        edges = cv2.Canny(roi, canny_thresh1, canny_thresh2)
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, hough_thresh,
+                                minLineLength=min_line_len, maxLineGap=5)
+        if lines is not None:
+            led_indices.append(i)
+    return led_indices
+
+
+
+
 def simple_dbscan(points, eps, min_samples):
     """sklearn이 없을 때 사용하는 간단한 클러스터링"""
     if len(points) == 0:
@@ -859,6 +977,16 @@ def main():
             # 이미지 표시
             cv2.imshow(win_name, display_img)
             cv2.imshow("Hole Detection Info", info_img)
+            led_hull, led_centroid, led_body_mask = detect_led_body(img_clean)
+            square_size = hole_r * 2  # 원하는 크기로 조정 가능
+            covered_mask = cover_holes_excluding_led(mask_small_removed,
+                                            hole_centers,
+                                            interpolated_points,
+                                            led_hull,
+                                            square_size)
+            cv2.imshow("Covered Holes Mask", covered_mask)
+
+
             #cv2.imshow("Preprocessing Steps (2x4)", preprocessing_grid)
             
             # 창 크기 설정
