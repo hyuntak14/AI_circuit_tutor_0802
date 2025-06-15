@@ -10,23 +10,6 @@ except ImportError:
     print("Warning: sklearn not available. Using simple clustering instead.")
 
     
-def intersect_similar_lines(lines1, lines2, angle_thresh, dist_thresh):
-    """lines1과 lines2에서 유사한(=교집합) 선분만 추출"""
-    inter = []
-    for x1, y1, x2, y2 in lines1:
-        angle1 = math.atan2(y2 - y1, x2 - x1)
-        mid1 = ((x1 + x2) / 2, (y1 + y2) / 2)
-        for xx1, yy1, xx2, yy2 in lines2:
-            angle2 = math.atan2(yy2 - yy1, xx2 - xx1)
-            angle_diff = abs(angle1 - angle2)
-            angle_diff = min(angle_diff, 2 * math.pi - angle_diff)
-            mid2 = ((xx1 + xx2) / 2, (yy1 + yy2) / 2)
-            dist = math.hypot(mid1[0] - mid2[0], mid1[1] - mid2[1])
-            if angle_diff < angle_thresh and dist < dist_thresh:
-                inter.append((x1, y1, x2, y2))
-                break
-    return inter
-
 # --- 간단한 DBSCAN 대체 함수 ---
 def simple_dbscan(points, eps, min_samples):
     """sklearn이 없을 때 사용하는 간단한 클러스터링"""
@@ -255,60 +238,6 @@ def detect_lines_lsd(img_gray, min_length=10):
     
     return filtered_lines
 
-def merge_lines_dbscan(lines, angle_thresh, dist_thresh, min_samples=2):
-    """
-    DBSCAN을 이용해 각도와 위치가 유사한 선들을 클러스터링하고,
-    각 클러스터의 양 끝단(가장 먼 두 점)을 잇는 선으로 병합해서 반환.
-    """
-    if not lines:
-        return []
-
-    # 1) DBSCAN을 위한 feature 벡터 생성
-    w = dist_thresh / angle_thresh
-    feats = []
-    for x1,y1,x2,y2 in lines:
-        angle = math.atan2(y2-y1, x2-x1)
-        midx, midy = (x1+x2)/2, (y1+y2)/2
-        feats.append([midx, midy, angle * w])
-    feats = np.array(feats)
-
-    # 2) 클러스터링
-    clustering = DBSCAN(eps=dist_thresh, min_samples=min_samples).fit(feats)
-    labels = clustering.labels_
-
-    merged = []
-    # 3) 각 클러스터별로 선 재생성
-    for lbl in set(labels):
-        idxs = np.where(labels == lbl)[0]
-        # 노이즈(-1)는 그냥 원본 유지
-        if lbl == -1:
-            for i in idxs:
-                merged.append(lines[i])
-            continue
-
-        # 클러스터에 속한 모든 선의 엔드포인트 수집
-        pts = []
-        for i in idxs:
-            x1,y1,x2,y2 = lines[i]
-            pts.append((x1,y1))
-            pts.append((x2,y2))
-
-        # 가장 먼 두 점 찾기
-        max_d = 0
-        best = None
-        for i in range(len(pts)):
-            for j in range(i+1, len(pts)):
-                d = math.hypot(pts[i][0]-pts[j][0], pts[i][1]-pts[j][1])
-                if d > max_d:
-                    max_d = d
-                    best = (pts[i], pts[j])
-
-        if best:
-            (sx,sy), (ex,ey) = best
-            merged.append((sx,sy,ex,ey))
-
-    return merged
-
 # --- LED 몸체 검출 함수 ---
 def detect_led_body(img):
     """LED 몸체 검출 (빨간색, 노란색, 초록색 기준)"""
@@ -356,392 +285,325 @@ def detect_led_body(img):
     
     return hull, centroid, body_mask
 
-# ========== 1. 대칭성 기반 리드 쌍 검출 ==========
-def find_symmetric_lead_pairs(hole_centers, led_centroid, symmetry_tolerance=15, 
-                            distance_ratio_range=(0.8, 1.2)):
-    """LED 중심 기준으로 대칭적인 구멍 쌍 찾기"""
-    if not hole_centers or led_centroid is None:
+import numpy as np
+import math
+from collections import deque
+
+def merge_lines(lines, angle_thresh_deg=10, dist_thresh=20):
+    """
+    비슷한 각도와 가까운 거리에 있는 선분들을 병합합니다.
+
+    Args:
+        lines (list): [(x1, y1, x2, y2), ...] 형태의 선분 리스트.
+        angle_thresh_deg (float): 두 선분이 평행하다고 판단할 최대 각도 차이 (도).
+        dist_thresh (float): 두 선분의 끝점이 가깝다고 판단할 최대 거리.
+
+    Returns:
+        list: 병합된 선분들의 리스트.
+    """
+    if not lines or len(lines) < 2:
+        return lines
+
+    num_lines = len(lines)
+    
+    # 각 선분의 속성(각도, 단위벡터) 미리 계산
+    line_props = []
+    for line in lines:
+        x1, y1, x2, y2 = line
+        angle = math.atan2(y2 - y1, x2 - x1)
+        vec = np.array([x2 - x1, y2 - y1])
+        norm = np.linalg.norm(vec)
+        unit_vec = vec / norm if norm > 0 else np.array([0, 0])
+        line_props.append({'angle': angle, 'unit_vec': unit_vec, 'endpoints': [(x1, y1), (x2, y2)]})
+
+    # 인접 리스트로 그래프 구성
+    adj = [[] for _ in range(num_lines)]
+    angle_thresh_rad = math.radians(angle_thresh_deg)
+
+    for i in range(num_lines):
+        for j in range(i + 1, num_lines):
+            # 1. 각도 유사성 검사
+            # 단위 벡터의 내적을 사용하여 방향에 무관한 평행성 검사
+            dot_product = abs(np.dot(line_props[i]['unit_vec'], line_props[j]['unit_vec']))
+            if dot_product < math.cos(angle_thresh_rad):
+                continue
+
+            # 2. 거리 근접성 검사
+            p1, p2 = line_props[i]['endpoints']
+            p3, p4 = line_props[j]['endpoints']
+            
+            min_dist = min(
+                math.hypot(p1[0] - p3[0], p1[1] - p3[1]),
+                math.hypot(p1[0] - p4[0], p1[1] - p4[1]),
+                math.hypot(p2[0] - p3[0], p2[1] - p3[1]),
+                math.hypot(p2[0] - p4[0], p2[1] - p4[1])
+            )
+
+            if min_dist < dist_thresh:
+                adj[i].append(j)
+                adj[j].append(i)
+
+    # BFS/DFS를 사용하여 연결된 그룹(클러스터) 찾기
+    visited = [False] * num_lines
+    groups = []
+    for i in range(num_lines):
+        if not visited[i]:
+            current_group = []
+            q = deque([i])
+            visited[i] = True
+            while q:
+                u = q.popleft()
+                current_group.append(u)
+                for v in adj[u]:
+                    if not visited[v]:
+                        visited[v] = True
+                        q.append(v)
+            groups.append(current_group)
+
+    # 각 그룹을 하나의 선분으로 병합
+    merged_lines = []
+    for group in groups:
+        if len(group) == 1:
+            merged_lines.append(lines[group[0]])
+            continue
+
+        # 그룹 내 모든 끝점 수집
+        points = []
+        for line_idx in group:
+            points.extend(line_props[line_idx]['endpoints'])
+
+        # 가장 멀리 떨어진 두 끝점 찾기
+        max_dist_sq = -1
+        best_pair = None
+        for i in range(len(points)):
+            for j in range(i + 1, len(points)):
+                dist_sq = (points[i][0] - points[j][0])**2 + (points[i][1] - points[j][1])**2
+                if dist_sq > max_dist_sq:
+                    max_dist_sq = dist_sq
+                    best_pair = (points[i], points[j])
+        
+        p_start, p_end = best_pair
+        merged_lines.append((int(p_start[0]), int(p_start[1]), int(p_end[0]), int(p_end[1])))
+
+    return merged_lines
+
+
+# ========== 새로운 LED 리드 검출 함수들 ==========
+
+def detect_lines_to_body(lines, centroid, hull, direction_threshold=0.6, 
+                        body_proximity_threshold=30, min_line_length=20):
+    """
+    LED 몸체로 향하는 선들을 검출합니다.
+    
+    Args:
+        lines: 검출된 선분들 [(x1, y1, x2, y2), ...]
+        centroid: LED 몸체의 중심점 (cx, cy)
+        hull: LED 몸체의 convex hull
+        direction_threshold: 선의 방향이 중심을 향해야 하는 임계값 (0~1)
+        body_proximity_threshold: 선의 한쪽 끝이 몸체에 얼마나 가까워야 하는지
+        min_line_length: 최소 선의 길이
+    
+    Returns:
+        list: LED 몸체로 향하는 선들의 정보
+    """
+    if not lines or not centroid:
         return []
     
-    symmetric_pairs = []
-    used_holes = set()
-    
-    for i, hole1 in enumerate(hole_centers):
-        if i in used_holes:
-            continue
-            
-        x1, y1 = hole1
-        # LED 중심 기준으로 반대편 예상 위치 계산
-        expected_x = 2 * led_centroid[0] - x1
-        expected_y = 2 * led_centroid[1] - y1
-        
-        # 가장 가까운 구멍 찾기
-        best_match = None
-        best_distance = float('inf')
-        best_idx = -1
-        
-        for j, hole2 in enumerate(hole_centers):
-            if j == i or j in used_holes:
-                continue
-                
-            x2, y2 = hole2
-            distance_to_expected = math.hypot(x2 - expected_x, y2 - expected_y)
-            
-            if distance_to_expected < symmetry_tolerance and distance_to_expected < best_distance:
-                # 중심으로부터의 거리 비율 확인
-                dist1 = math.hypot(x1 - led_centroid[0], y1 - led_centroid[1])
-                dist2 = math.hypot(x2 - led_centroid[0], y2 - led_centroid[1])
-                
-                if dist1 > 0:
-                    ratio = dist2 / dist1
-                    if distance_ratio_range[0] <= ratio <= distance_ratio_range[1]:
-                        best_match = hole2
-                        best_distance = distance_to_expected
-                        best_idx = j
-        
-        if best_match is not None:
-            symmetric_pairs.append({
-                'hole1': hole1,
-                'hole2': best_match,
-                'hole1_idx': i,
-                'hole2_idx': best_idx,
-                'symmetry_error': best_distance,
-                'pair_indices': (i, best_idx)
-            })
-            used_holes.add(i)
-            used_holes.add(best_idx)
-    
-    return symmetric_pairs
-
-# ========== 2. 고급 점수 매기기 시스템 ==========
-def advanced_lead_scoring(hole_centers, lines, led_hull, led_centroid, 
-                        symmetric_pairs, max_distance=30, exclude_distance=10, 
-                        min_body_distance=50):
-    """다중 기준 기반 고급 점수 매기기"""
-    scored_holes = []
-    
-    # 직선과 구멍 매칭 정보 미리 계산
-    line_hole_connections = {}
-    for hole_idx, (hx, hy) in enumerate(hole_centers):
-        min_line_dist = float('inf')
-        best_line = None
-        
-        for line in lines:
-            x1, y1, x2, y2 = line
-            # 각 직선의 끝점에서 구멍까지의 거리
-            dist1 = math.hypot(hx - x1, hy - y1)
-            dist2 = math.hypot(hx - x2, hy - y2)
-            min_dist = min(dist1, dist2)
-            
-            if exclude_distance < min_dist <= max_distance and min_dist < min_line_dist:
-                # LED 몸체로부터의 거리 체크
-                if led_hull is not None:
-                    body_dist = cv2.pointPolygonTest(led_hull, (float(hx), float(hy)), True)
-                    if abs(body_dist) >= min_body_distance:
-                        min_line_dist = min_dist
-                        best_line = line
-        
-        line_hole_connections[hole_idx] = {
-            'min_distance': min_line_dist,
-            'best_line': best_line
-        }
-    
-    for hole_idx, (hx, hy) in enumerate(hole_centers):
-        score_components = {}
-        
-        # 1. 기본 거리 점수 (LED 중심 및 몸체로부터의 거리)
-        if led_centroid is not None:
-            dist_to_center = math.hypot(hx - led_centroid[0], hy - led_centroid[1])
-            score_components['center_distance'] = max(0, 100 - dist_to_center * 0.5)
-        else:
-            score_components['center_distance'] = 0
-        
-        if led_hull is not None:
-            body_dist = abs(cv2.pointPolygonTest(led_hull, (float(hx), float(hy)), True))
-            if body_dist < min_body_distance:
-                score_components['body_distance'] = 0  # 너무 가까우면 0점
-            else:
-                score_components['body_distance'] = min(100, body_dist * 2)
-        else:
-            score_components['body_distance'] = 50
-        
-        # 2. 대칭성 점수
-        score_components['symmetry'] = 0
-        for pair in symmetric_pairs:
-            if hole_idx in [pair['hole1_idx'], pair['hole2_idx']]:
-                # 대칭성이 좋을수록 높은 점수 (최대 100점)
-                symmetry_score = max(0, 100 - pair['symmetry_error'] * 5)
-                score_components['symmetry'] = symmetry_score
-                break
-        
-        # 3. 직선 연결성 점수
-        connection_info = line_hole_connections.get(hole_idx, {})
-        if connection_info.get('best_line') is not None:
-            line_dist = connection_info['min_distance']
-            score_components['line_connectivity'] = max(0, 50 - line_dist)
-            
-            # 직선 방향성 점수 추가
-            line = connection_info['best_line']
-            if led_centroid is not None:
-                direction_score = calculate_line_direction_score(line, (hx, hy), led_centroid)
-                score_components['direction'] = direction_score
-            else:
-                score_components['direction'] = 0
-        else:
-            score_components['line_connectivity'] = 0
-            score_components['direction'] = 0
-        
-        # 4. 구멍 품질 점수 (크기, 원형도 등 - hole_info가 있다면)
-        score_components['hole_quality'] = 50  # 기본값
-        
-        # 5. 경계 거리 점수 (이미지 경계에서 너무 가깝지 않은지)
-        # 이 부분은 이미지 크기 정보가 필요하므로 생략하거나 별도 구현
-        
-        # 최종 점수 합계 (가중 평균)
-        weights = {
-            'center_distance': 0.15,
-            'body_distance': 0.25,
-            'symmetry': 0.30,
-            'line_connectivity': 0.20,
-            'direction': 0.10
-        }
-        
-        total_score = sum(score_components[key] * weights[key] for key in weights)
-        
-        scored_holes.append({
-            'hole_idx': hole_idx,
-            'hole_pos': (hx, hy),
-            'total_score': total_score,
-            'score_components': score_components,
-            'line_info': connection_info
-        })
-    
-    return scored_holes
-
-def calculate_line_direction_score(line, hole_pos, led_centroid):
-    """직선이 LED 중심을 향하는 방향성 점수 계산"""
-    x1, y1, x2, y2 = line
-    hx, hy = hole_pos
-    
-    # 구멍에 더 가까운 끝점 찾기
-    dist1 = math.hypot(hx - x1, hy - y1)
-    dist2 = math.hypot(hx - x2, hy - y2)
-    
-    if dist1 < dist2:
-        line_point = (x1, y1)
-        other_point = (x2, y2)
-    else:
-        line_point = (x2, y2)
-        other_point = (x1, y1)
-    
-    # 직선 방향 벡터 (구멍 쪽 점에서 다른 점으로)
-    line_vec = np.array([other_point[0] - line_point[0], other_point[1] - line_point[1]])
-    line_mag = np.linalg.norm(line_vec)
-    
-    if line_mag == 0:
-        return 0
-    
-    line_vec_norm = line_vec / line_mag
-    
-    # 구멍에서 LED 중심으로의 벡터
-    to_center_vec = np.array([led_centroid[0] - hx, led_centroid[1] - hy])
-    center_mag = np.linalg.norm(to_center_vec)
-    
-    if center_mag == 0:
-        return 0
-    
-    to_center_vec_norm = to_center_vec / center_mag
-    
-    # 코사인 유사도 계산
-    cos_angle = np.dot(line_vec_norm, to_center_vec_norm)
-    
-    # 방향이 일치할수록 높은 점수 (0~50점)
-    direction_score = max(0, cos_angle * 50)
-    
-    return direction_score
-
-# ========== 3. 품질 검증 및 에러 처리 ==========
-def validate_lead_detection_quality(selected_leads, led_centroid, 
-                                   expected_distance_range=(30, 150),
-                                   max_asymmetry_ratio=2.0,
-                                   min_confidence_score=30):
-    """검출 품질 검증"""
-    validation_results = {
-        'is_valid': True,
-        'warnings': [],
-        'errors': []
-    }
-    
-    # 1. 개수 확인
-    if len(selected_leads) != 2:
-        validation_results['is_valid'] = False
-        validation_results['errors'].append(f"정확히 2개의 리드가 필요하나 {len(selected_leads)}개 검출됨")
-        return validation_results
-    
-    # 2. 신뢰도 점수 확인
-    for i, lead in enumerate(selected_leads):
-        if lead['total_score'] < min_confidence_score:
-            validation_results['warnings'].append(f"리드 {i+1}의 신뢰도가 낮음: {lead['total_score']:.1f}")
-    
-    # 3. 두 리드 간 거리 확인
-    lead1_pos = selected_leads[0]['hole_pos']
-    lead2_pos = selected_leads[1]['hole_pos']
-    distance_between_leads = math.hypot(
-        lead1_pos[0] - lead2_pos[0],
-        lead1_pos[1] - lead2_pos[1]
-    )
-    
-    if not (expected_distance_range[0] <= distance_between_leads <= expected_distance_range[1]):
-        validation_results['warnings'].append(
-            f"리드 간 거리가 예상 범위를 벗어남: {distance_between_leads:.1f}px "
-            f"(예상: {expected_distance_range[0]}-{expected_distance_range[1]}px)"
-        )
-    
-    # 4. 대칭성 확인
-    if led_centroid is not None:
-        center_to_lead1 = math.hypot(
-            lead1_pos[0] - led_centroid[0],
-            lead1_pos[1] - led_centroid[1]
-        )
-        center_to_lead2 = math.hypot(
-            lead2_pos[0] - led_centroid[0],
-            lead2_pos[1] - led_centroid[1]
-        )
-        
-        if center_to_lead1 > 0 and center_to_lead2 > 0:
-            distance_ratio = max(center_to_lead1, center_to_lead2) / min(center_to_lead1, center_to_lead2)
-            if distance_ratio > max_asymmetry_ratio:
-                validation_results['warnings'].append(
-                    f"리드의 비대칭성이 큼: 중심 거리 비율 {distance_ratio:.2f}"
-                )
-    
-    # 5. 점수 구성 요소 분석
-    for i, lead in enumerate(selected_leads):
-        components = lead.get('score_components', {})
-        
-        # 대칭성 점수가 너무 낮으면 경고
-        if components.get('symmetry', 0) < 20:
-            validation_results['warnings'].append(f"리드 {i+1}의 대칭성 점수가 낮음")
-        
-        # 직선 연결성이 없으면 경고
-        if components.get('line_connectivity', 0) < 10:
-            validation_results['warnings'].append(f"리드 {i+1}의 직선 연결성이 낮음")
-    
-    return validation_results
-
-def robust_lead_selection(scored_holes, min_distance_between_leads=20, 
-                         confidence_threshold=30, prefer_symmetric_pairs=True):
-    """강건한 최종 리드 선택"""
-    # 점수순 정렬
-    scored_holes.sort(key=lambda x: x['total_score'], reverse=True)
-    
-    selected_leads = []
-    
-    # 대칭 쌍을 우선적으로 고려
-    if prefer_symmetric_pairs:
-        # 대칭성 점수가 높은 구멍들 우선 선택
-        symmetric_candidates = [h for h in scored_holes 
-                              if h['score_components'].get('symmetry', 0) > 50]
-        
-        if len(symmetric_candidates) >= 2:
-            # 대칭성이 높은 후보들 중에서 선택
-            for candidate in symmetric_candidates:
-                if candidate['total_score'] < confidence_threshold:
-                    continue
-                
-                too_close = False
-                for selected in selected_leads:
-                    dist = math.hypot(
-                        candidate['hole_pos'][0] - selected['hole_pos'][0],
-                        candidate['hole_pos'][1] - selected['hole_pos'][1]
-                    )
-                    if dist < min_distance_between_leads:
-                        too_close = True
-                        break
-                
-                if not too_close:
-                    selected_leads.append(candidate)
-                    
-                if len(selected_leads) >= 2:
-                    break
-    
-    # 대칭 쌍으로 충분하지 않다면 일반적인 방법으로 보완
-    if len(selected_leads) < 2:
-        for candidate in scored_holes:
-            if candidate in selected_leads:
-                continue
-                
-            if candidate['total_score'] < confidence_threshold:
-                continue
-            
-            too_close = False
-            for selected in selected_leads:
-                dist = math.hypot(
-                    candidate['hole_pos'][0] - selected['hole_pos'][0],
-                    candidate['hole_pos'][1] - selected['hole_pos'][1]
-                )
-                if dist < min_distance_between_leads:
-                    too_close = True
-                    break
-            
-            if not too_close:
-                selected_leads.append(candidate)
-                
-            if len(selected_leads) >= 2:
-                break
-    
-    return selected_leads
-
-# --- 직선과 구멍 간 거리 계산 (기존 함수 유지) ---
-def find_nearest_holes_to_line_endpoints(lines, hole_centers, hull, max_distance=30, 
-                                        exclude_distance=10, min_body_distance=50):
-    """각 직선의 끝점에서 가장 가까운 구멍 찾기 (너무 가까운 구멍, 몸체에 가까운 구멍 제외)"""
-    line_hole_pairs = []
+    body_lines = []
+    cx, cy = centroid
     
     for line in lines:
         x1, y1, x2, y2 = line
-        endpoints = [(x1, y1), (x2, y2)]
         
-        line_info = {
-            'line': line,
-            'holes': [],
-            'distances': []
-        }
+        # 선의 길이 체크
+        line_length = math.hypot(x2 - x1, y2 - y1)
+        if line_length < min_line_length:
+            continue
         
-        for endpoint in endpoints:
-            min_dist = float('inf')
-            nearest_hole = None
-            nearest_idx = -1
+        # 각 끝점에서 LED 중심까지의 거리
+        dist1 = math.hypot(x1 - cx, y1 - cy)
+        dist2 = math.hypot(x2 - cx, y2 - cy)
+        
+        # 몸체와의 근접성 체크 (hull이 있을 경우)
+        body_dist1 = float('inf')
+        body_dist2 = float('inf')
+        if hull is not None:
+            body_dist1 = abs(cv2.pointPolygonTest(hull, (float(x1), float(y1)), True))
+            body_dist2 = abs(cv2.pointPolygonTest(hull, (float(x2), float(y2)), True))
+        
+        # 선의 방향 벡터
+        line_vec = np.array([x2 - x1, y2 - y1])
+        line_vec_norm = line_vec / np.linalg.norm(line_vec)
+        
+        # 각 끝점에서 중심으로의 방향 벡터
+        to_center1 = np.array([cx - x1, cy - y1])
+        to_center2 = np.array([cx - x2, cy - y2])
+        
+        to_center1_norm = to_center1 / np.linalg.norm(to_center1) if np.linalg.norm(to_center1) > 0 else np.zeros(2)
+        to_center2_norm = to_center2 / np.linalg.norm(to_center2) if np.linalg.norm(to_center2) > 0 else np.zeros(2)
+        
+        # 방향성 체크: 선이 중심을 향하고 있는지
+        dot1 = np.dot(line_vec_norm, to_center1_norm)
+        dot2 = np.dot(-line_vec_norm, to_center2_norm)  # 반대 방향도 체크
+        
+        # 조건 체크
+        is_pointing_to_center = max(dot1, dot2) > direction_threshold
+        is_near_body = min(body_dist1, body_dist2) < body_proximity_threshold or min(dist1, dist2) < body_proximity_threshold * 1.5
+        
+        if is_pointing_to_center and is_near_body:
+            # 중심에서 더 가까운 점과 더 먼 점 결정
+            if dist1 < dist2:
+                near_point = (x1, y1)
+                far_point = (x2, y2)
+                far_distance = dist2
+            else:
+                near_point = (x2, y2)
+                far_point = (x1, y1)
+                far_distance = dist1
             
-            for idx, hole in enumerate(hole_centers):
-                dist = np.hypot(endpoint[0] - hole[0], endpoint[1] - hole[1])
-                
-                # LED 몸체로부터의 거리 체크
-                if hull is not None:
-                    body_dist = cv2.pointPolygonTest(hull, (float(hole[0]), float(hole[1])), True)
-                    # 음수면 hull 외부이고 절대값이 거리
-                    if abs(body_dist) < min_body_distance:
-                        continue  # 몸체에 너무 가까운 구멍은 제외
-                
-                # 너무 가까운 구멍은 제외하고, 적정 거리의 구멍만 선택
-                if exclude_distance < dist < min_dist and dist <= max_distance:
-                    min_dist = dist
-                    nearest_hole = hole
-                    nearest_idx = idx
-            
-            if nearest_hole is not None:
-                line_info['holes'].append((nearest_idx, nearest_hole))
-                line_info['distances'].append(min_dist)
-        
-        if line_info['holes']:
-            line_hole_pairs.append(line_info)
+            body_lines.append({
+                'line': line,
+                'near_point': near_point,
+                'far_point': far_point,
+                'far_distance': far_distance,
+                'length': line_length,
+                'direction_score': max(dot1, dot2)
+            })
     
-    return line_hole_pairs
+    # 거리 순으로 정렬 (멀수록 우선)
+    body_lines.sort(key=lambda x: x['far_distance'], reverse=True)
+    
+    return body_lines
 
-# --- 시각화 함수 (개선: 점수 구성 요소 표시) ---
-def visualize_results(img, hole_centers, interpolated_points, lines, hull, centroid, 
-                     selected_holes, all_candidates, validation_results=None):
-    """최종 결과 시각화 (개선된 버전)"""
+def find_holes_near_line_endpoints(body_lines, hole_centers, hull, max_distance=25, body_exclusion_distance=50):
+    """
+    LED 몸체로 향하는 선들의 먼 쪽 끝점 근처에 있는 구멍들을 찾습니다.
+    
+    Args:
+        body_lines: detect_lines_to_body에서 반환된 선들의 정보
+        hole_centers: 검출된 구멍들의 중심점 리스트
+        hull: LED 몸체의 convex hull
+        max_distance: 끝점에서 구멍까지의 최대 거리
+        body_exclusion_distance: LED 몸체 경계에서 제외할 거리
+    
+    Returns:
+        tuple: (리드 후보들의 정보, 제외된 구멍들의 정보)
+    """
+    lead_candidates = []
+    excluded_holes = []
+    
+    for line_info in body_lines:
+        far_point = line_info['far_point']
+        fx, fy = far_point
+        
+        # 이 끝점 근처의 구멍들 찾기
+        nearby_holes = []
+        for hole_pos in hole_centers:
+            hx, hy = hole_pos
+            distance = math.hypot(fx - hx, fy - hy)
+            
+            # LED 몸체와의 거리 체크 (제외 조건)
+            if hull is not None:
+                body_distance = abs(cv2.pointPolygonTest(hull, (float(hx), float(hy)), True))
+                if body_distance < body_exclusion_distance:
+                    excluded_holes.append({
+                        'hole_pos': hole_pos,
+                        'body_distance': body_distance,
+                        'reason': 'too_close_to_body'
+                    })
+                    continue
+            
+            if distance <= max_distance:
+                nearby_holes.append({
+                    'hole_pos': hole_pos,
+                    'distance_to_endpoint': distance,
+                    'line_info': line_info
+                })
+        
+        # 이 선에 대해 가장 가까운 구멍 선택
+        if nearby_holes:
+            nearby_holes.sort(key=lambda x: x['distance_to_endpoint'])
+            best_hole = nearby_holes[0]
+            
+            # 점수 계산
+            score = (line_info['length'] * 2 +  # 선의 길이
+                    line_info['direction_score'] * 100 +  # 방향성
+                    (max_distance - best_hole['distance_to_endpoint']) * 3 +  # 근접성
+                    line_info['far_distance'] * 0.5)  # 중심에서의 거리
+            
+            lead_candidates.append({
+                'hole_pos': best_hole['hole_pos'],
+                'line_info': line_info,
+                'distance_to_endpoint': best_hole['distance_to_endpoint'],
+                'score': score
+            })
+    
+    # 점수 순으로 정렬
+    lead_candidates.sort(key=lambda x: x['score'], reverse=True)
+    
+    return lead_candidates, excluded_holes
+
+def select_best_symmetric_leads(lead_candidates, centroid, max_leads=2):
+    """
+    리드 후보들 중에서 대칭성을 고려하여 최적의 리드들을 선택합니다.
+    
+    Args:
+        lead_candidates: find_holes_near_line_endpoints에서 반환된 후보들
+        centroid: LED 중심점
+        max_leads: 선택할 최대 리드 개수
+    
+    Returns:
+        list: 선택된 리드들
+    """
+    if not lead_candidates or not centroid:
+        return lead_candidates[:max_leads]
+    
+    if len(lead_candidates) < 2:
+        return lead_candidates
+    
+    cx, cy = centroid
+    best_pair = None
+    best_score = float('-inf')
+    
+    # 모든 쌍에 대해 대칭성 검사
+    for i in range(len(lead_candidates)):
+        for j in range(i + 1, len(lead_candidates)):
+            candidate1 = lead_candidates[i]
+            candidate2 = lead_candidates[j]
+            
+            h1x, h1y = candidate1['hole_pos']
+            h2x, h2y = candidate2['hole_pos']
+            
+            # 대칭성 계산
+            # 1. 중심에서의 거리 유사성
+            dist1 = math.hypot(h1x - cx, h1y - cy)
+            dist2 = math.hypot(h2x - cx, h2y - cy)
+            distance_similarity = 1.0 / (1.0 + abs(dist1 - dist2))
+            
+            # 2. 각도 대칭성 (180도에 가까운지)
+            angle1 = math.atan2(h1y - cy, h1x - cx)
+            angle2 = math.atan2(h2y - cy, h2x - cx)
+            angle_diff = abs(abs(angle1 - angle2) - math.pi)
+            angle_symmetry = 1.0 / (1.0 + angle_diff)
+            
+            # 3. 개별 점수 합계
+            individual_scores = candidate1['score'] + candidate2['score']
+            
+            # 종합 점수
+            symmetry_score = (distance_similarity * 50 + 
+                            angle_symmetry * 100 + 
+                            individual_scores * 0.1)
+            
+            if symmetry_score > best_score:
+                best_score = symmetry_score
+                best_pair = [candidate1, candidate2]
+    
+    return best_pair if best_pair else lead_candidates[:max_leads]
+
+# --- 시각화 함수 ---
+def visualize_new_results(img, hole_centers, interpolated_points, all_lines, merged_lines,
+                         hull, centroid, body_lines, lead_candidates, selected_leads, excluded_holes):
+    """새로운 방식의 결과 시각화"""
     vis = img.copy()
     
     # LED 몸체 그리기
@@ -750,94 +612,111 @@ def visualize_results(img, hole_centers, interpolated_points, lines, hull, centr
         cv2.putText(vis, "LED Body", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
     
     if centroid is not None:
-        cv2.circle(vis, centroid, 5, (0, 255, 255), -1)
+        cv2.circle(vis, centroid, 8, (0, 255, 255), -1)
     
-    # 검출된 구멍 그리기 (회색)
-    for i, (cx, cy) in enumerate(hole_centers):
-        cv2.circle(vis, (int(cx), int(cy)), 8, (128, 128, 128), 1)
+    # 모든 검출된 구멍 그리기 (회색)
+    for cx, cy in hole_centers:
+        cv2.circle(vis, (int(cx), int(cy)), 6, (128, 128, 128), 1)
         cv2.circle(vis, (int(cx), int(cy)), 2, (128, 128, 128), -1)
     
     # 보간된 구멍 그리기 (보라색)
     for cx, cy in interpolated_points:
-        cv2.circle(vis, (int(cx), int(cy)), 8, (255, 0, 255), 1)
+        cv2.circle(vis, (int(cx), int(cy)), 6, (255, 0, 255), 1)
         cv2.circle(vis, (int(cx), int(cy)), 2, (255, 0, 255), -1)
     
-    # 모든 직선 그리기 (연한 초록)
-    for x1, y1, x2, y2 in lines:
-        cv2.line(vis, (x1, y1), (x2, y2), (0, 128, 0), 1)
+    # 제외된 구멍들 표시 (주황색 X)
+    for excluded_info in excluded_holes:
+        cx, cy = excluded_info['hole_pos']
+        cx, cy = int(cx), int(cy)
+        # X 표시
+        cv2.line(vis, (cx-8, cy-8), (cx+8, cy+8), (0, 165, 255), 2)
+        cv2.line(vis, (cx-8, cy+8), (cx+8, cy-8), (0, 165, 255), 2)
+        cv2.circle(vis, (cx, cy), 10, (0, 165, 255), 1)
     
-    # 후보 구멍들 표시 (파란색) - 선택되지 않은 후보들
-    selected_indices = [h['hole_idx'] for h in selected_holes]
-    for candidate in all_candidates:
-        if candidate['hole_idx'] not in selected_indices:
+    # 모든 선 그리기 (연한 색)
+    for x1, y1, x2, y2 in merged_lines:
+        cv2.line(vis, (x1, y1), (x2, y2), (200, 200, 200), 1)
+    
+    # LED 몸체로 향하는 선들 강조 (초록색)
+    for line_info in body_lines:
+        x1, y1, x2, y2 = line_info['line']
+        cv2.line(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        
+        # 먼 쪽 끝점 표시
+        far_point = line_info['far_point']
+        cv2.circle(vis, (int(far_point[0]), int(far_point[1])), 5, (0, 255, 0), -1)
+    
+    # 리드 후보들 표시 (노란색)
+    for i, candidate in enumerate(lead_candidates):
+        if candidate not in selected_leads:
             cx, cy = candidate['hole_pos']
             cx, cy = int(cx), int(cy)
-            # 후보점 표시
-            cv2.circle(vis, (cx, cy), 10, (255, 128, 0), 2)  # 주황색
-            cv2.circle(vis, (cx, cy), 3, (255, 128, 0), -1)
-            # 점수 표시
-            score_text = f"{candidate['total_score']:.0f}"
-            cv2.putText(vis, score_text, (cx + 12, cy - 5), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 128, 0), 1)
+            score = candidate['score']
+            
+            cv2.circle(vis, (cx, cy), 10, (0, 255, 255), 2)
+            cv2.putText(vis, f"{score:.0f}", (cx + 12, cy - 5), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
     
-    # 최종 선택된 LED 리드 구멍 강조 (빨간색)
-    for i, hole_info in enumerate(selected_holes):
-        cx, cy = hole_info['hole_pos']
+    # 최종 선택된 LED 리드 강조 (빨간색)
+    for i, lead in enumerate(selected_leads):
+        cx, cy = lead['hole_pos']
         cx, cy = int(cx), int(cy)
+        score = lead['score']
         
         # 구멍 강조
-        cv2.circle(vis, (cx, cy), 12, (0, 0, 255), 3)
-        cv2.circle(vis, (cx, cy), 3, (0, 0, 255), -1)
+        cv2.circle(vis, (cx, cy), 15, (0, 0, 255), 3)
+        cv2.circle(vis, (cx, cy), 4, (0, 0, 255), -1)
         
-        # 관련 직선 강조 (있다면)
-        line_info = hole_info.get('line_info', {})
-        if line_info.get('best_line') is not None:
-            x1, y1, x2, y2 = line_info['best_line']
-            cv2.line(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        # 연결된 선 강조
+        line_info = lead['line_info']
+        x1, y1, x2, y2 = line_info['line']
+        cv2.line(vis, (x1, y1), (x2, y2), (0, 0, 255), 4)
         
-        # LED 번호와 점수 표시
-        cv2.putText(vis, f"LED {i+1}", (cx + 15, cy - 10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        score_text = f"Score: {hole_info['total_score']:.1f}"
-        cv2.putText(vis, score_text, (cx + 15, cy + 15), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        # LED 번호와 정보 표시
+        cv2.putText(vis, f"LED {i+1}", (cx + 20, cy - 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        cv2.putText(vis, f"Score: {score:.0f}", (cx + 20, cy + 5), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         
-        # 점수 구성 요소 표시
-        components = hole_info.get('score_components', {})
-        y_offset = 35
-        for key, value in components.items():
-            if key in ['symmetry', 'line_connectivity']:  # 주요 점수만 표시
-                comp_text = f"{key[:3]}: {value:.0f}"
-                cv2.putText(vis, comp_text, (cx + 15, cy + y_offset), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                y_offset += 15
+        # 중심과의 연결선 그리기
+        if centroid is not None:
+            cv2.line(vis, centroid, (cx, cy), (255, 0, 0), 2, cv2.LINE_AA)
     
     # 정보 표시
-    info_y = vis.shape[0] - 120
-    cv2.putText(vis, f"Detected Holes: {len(hole_centers)} (gray)", (10, info_y), 
+    info_y = vis.shape[0] - 160
+    cv2.putText(vis, f"Total Holes: {len(hole_centers)} (gray)", (10, info_y), 
                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (128, 128, 128), 2)
     cv2.putText(vis, f"Interpolated: {len(interpolated_points)} (purple)", (10, info_y + 20), 
                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
-    cv2.putText(vis, f"Candidates: {len(all_candidates)} (orange), Selected: {len(selected_holes)} (red)", 
-               (10, info_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-    cv2.putText(vis, f"Lines: {len(lines)}", (10, info_y + 60), 
+    cv2.putText(vis, f"Excluded: {len(excluded_holes)} (orange X)", (10, info_y + 40), 
+               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+    cv2.putText(vis, f"Total Lines: {len(merged_lines)}", (10, info_y + 60), 
+               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+    cv2.putText(vis, f"Body Lines: {len(body_lines)} (green)", (10, info_y + 80), 
                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    cv2.putText(vis, f"Candidates: {len(lead_candidates)} (yellow)", (10, info_y + 100), 
+               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    cv2.putText(vis, f"Selected LEDs: {len(selected_leads)} (red)", (10, info_y + 120), 
+               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
     
-    # 검증 결과 표시
-    if validation_results is not None:
-        status_color = (0, 255, 0) if validation_results['is_valid'] else (0, 0, 255)
-        status_text = "VALID" if validation_results['is_valid'] else "INVALID"
-        cv2.putText(vis, f"Status: {status_text}", (10, info_y + 80), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+    # 대칭성 정보 표시
+    if len(selected_leads) == 2 and centroid is not None:
+        cx, cy = centroid
+        h1x, h1y = selected_leads[0]['hole_pos']
+        h2x, h2y = selected_leads[1]['hole_pos']
         
-        if validation_results['warnings']:
-            warning_count = len(validation_results['warnings'])
-            cv2.putText(vis, f"Warnings: {warning_count}", (10, info_y + 100), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        dist1 = math.hypot(h1x - cx, h1y - cy)
+        dist2 = math.hypot(h2x - cx, h2y - cy)
+        angle1 = math.degrees(math.atan2(h1y - cy, h1x - cx))
+        angle2 = math.degrees(math.atan2(h2y - cy, h2x - cx))
+        angle_diff = abs((angle2 - angle1 + 180) % 360 - 180)
+        
+        cv2.putText(vis, f"Symmetry: d1={dist1:.1f}, d2={dist2:.1f}, angle={angle_diff:.1f}°", 
+                   (10, info_y + 140), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
     
     return vis
 
-# --- 메인 함수 (개선된 버전) ---
+# --- 메인 함수 ---
 def main():
     # LED 이미지 찾기
     images = [f for f in os.listdir('.') if 'led' in f.lower() and 
@@ -864,32 +743,30 @@ def main():
     # 컨트롤러 창
     cv2.namedWindow('Controller', cv2.WINDOW_NORMAL)
     
-    # 트랙바 생성 (개선된 파라미터 포함)
+    # 트랙바 생성
     cv2.createTrackbar('Min Length', 'Controller', 30, 100, lambda x: None)
     cv2.createTrackbar('CLAHE Clip x10', 'Controller', 20, 100, lambda x: None)
     cv2.createTrackbar('Min Hole Area', 'Controller', 50, 500, lambda x: None)
     cv2.createTrackbar('Max Hole Area', 'Controller', 500, 2000, lambda x: None)
-    cv2.createTrackbar('Max Line-Hole Dist', 'Controller', 30, 100, lambda x: None)
-    cv2.createTrackbar('Min Line-Hole Dist', 'Controller', 10, 50, lambda x: None)
-    cv2.createTrackbar('Min Body Distance', 'Controller', 50, 150, lambda x: None)
-    cv2.createTrackbar('Merge Angle', 'Controller', 10, 45, lambda x: None)
-    cv2.createTrackbar('Merge Distance', 'Controller', 25, 100, lambda x: None)
+    cv2.createTrackbar('Direction Threshold x10', 'Controller', 6, 10, lambda x: None)
+    cv2.createTrackbar('Body Proximity', 'Controller', 30, 100, lambda x: None)
+    cv2.createTrackbar('Hole Distance', 'Controller', 25, 50, lambda x: None)
+    cv2.createTrackbar('LED Body Exclusion', 'Controller', 50, 150, lambda x: None)
     cv2.createTrackbar('Use Otsu', 'Controller', 1, 1, lambda x: None)
     cv2.createTrackbar('Enable Interpolation', 'Controller', 1, 1, lambda x: None)
     cv2.createTrackbar('Row/Col Eps', 'Controller', 15, 50, lambda x: None)
-    cv2.createTrackbar('Symmetry Tolerance', 'Controller', 15, 50, lambda x: None)  # 새로 추가
-    cv2.createTrackbar('Confidence Threshold', 'Controller', 30, 100, lambda x: None)  # 새로 추가
+    cv2.createTrackbar('Use Symmetry', 'Controller', 1, 1, lambda x: None)
     
     print("\nControls:")
     print("- 'n': Next image")
     print("- 'p': Previous image")
     print("- 's': Save result")
     print("- 'q' or ESC: Quit")
-    print("\nImproved Features:")
-    print("- Symmetry-based lead pair detection")
-    print("- Advanced multi-criteria scoring system")
-    print("- Quality validation and error handling")
-    print("- Detailed score component analysis")
+    print("\nNew Detection Logic:")
+    print("- Detect lines pointing to LED body")
+    print("- Exclude holes near LED body boundary")
+    print("- Find holes near far endpoints of those lines")
+    print("- Select best symmetric pair")
     
     while True:
         # 트랙바 값 읽기
@@ -897,16 +774,14 @@ def main():
         clahe_clip = cv2.getTrackbarPos('CLAHE Clip x10', 'Controller') / 10.0
         min_hole_area = cv2.getTrackbarPos('Min Hole Area', 'Controller')
         max_hole_area = cv2.getTrackbarPos('Max Hole Area', 'Controller')
-        max_line_hole_dist = cv2.getTrackbarPos('Max Line-Hole Dist', 'Controller')
-        min_line_hole_dist = cv2.getTrackbarPos('Min Line-Hole Dist', 'Controller')
-        min_body_distance = cv2.getTrackbarPos('Min Body Distance', 'Controller')
-        merge_angle = cv2.getTrackbarPos('Merge Angle', 'Controller')
-        merge_dist = cv2.getTrackbarPos('Merge Distance', 'Controller')
+        direction_threshold = cv2.getTrackbarPos('Direction Threshold x10', 'Controller') / 10.0
+        body_proximity = cv2.getTrackbarPos('Body Proximity', 'Controller')
+        hole_distance = cv2.getTrackbarPos('Hole Distance', 'Controller')
+        led_body_exclusion = cv2.getTrackbarPos('LED Body Exclusion', 'Controller')
         use_otsu = cv2.getTrackbarPos('Use Otsu', 'Controller') == 1
         enable_interpolation = cv2.getTrackbarPos('Enable Interpolation', 'Controller') == 1
         eps = cv2.getTrackbarPos('Row/Col Eps', 'Controller')
-        symmetry_tolerance = cv2.getTrackbarPos('Symmetry Tolerance', 'Controller')
-        confidence_threshold = cv2.getTrackbarPos('Confidence Threshold', 'Controller')
+        use_symmetry = cv2.getTrackbarPos('Use Symmetry', 'Controller') == 1
         
         try:
             # 1. 전처리
@@ -957,72 +832,49 @@ def main():
             # 4. 직선 검출
             lines_gray = detect_lines_lsd(processed, min_length)
             lines_binary = detect_lines_lsd(binary, min_length)
-            
-            # 모든 선 합치기
             all_lines = lines_gray + lines_binary
+            merged_lines = merge_lines(all_lines, angle_thresh_deg=10, dist_thresh=20)
             
-            # 유사한 선 병합
-            angle_thresh_rad = np.deg2rad(merge_angle)
+            # 5. 새로운 LED 리드 검출 로직
+            # 5-1. LED 몸체로 향하는 선들 검출
+            body_lines = detect_lines_to_body(merged_lines, centroid, hull, 
+                                            direction_threshold, body_proximity, min_length)
             
-            angle_thresh = np.deg2rad(10)
-            dist_thresh = 20
-            merged_lines = intersect_similar_lines(
-                lines_gray,
-                lines_binary,
-                angle_thresh,
-                dist_thresh
-            )
-
-            merged_lines = merge_lines_dbscan(merged_lines, angle_thresh, dist_thresh, min_samples=2)
+            # 5-2. 선의 끝점 근처 구멍들 찾기
+            lead_candidates, excluded_holes = find_holes_near_line_endpoints(
+                body_lines, all_holes, hull, hole_distance, led_body_exclusion)
             
-            # ========== 개선된 LED 리드 검출 파이프라인 ==========
-            
-            # 5. 대칭성 기반 리드 쌍 검출
-            symmetric_pairs = find_symmetric_lead_pairs(all_holes, centroid, symmetry_tolerance)
-            
-            # 6. 고급 점수 매기기 시스템
-            scored_holes = advanced_lead_scoring(
-                all_holes, merged_lines, hull, centroid, symmetric_pairs,
-                max_line_hole_dist, min_line_hole_dist, min_body_distance)
-            
-            # 7. 강건한 최종 선택
-            selected_holes = robust_lead_selection(
-                scored_holes, 
-                min_distance_between_leads=20, 
-                confidence_threshold=confidence_threshold,
-                prefer_symmetric_pairs=True)
-            
-            # 8. 품질 검증
-            validation_results = validate_lead_detection_quality(selected_holes, centroid)
+            # 5-3. 최적의 대칭 쌍 선택
+            if use_symmetry:
+                selected_leads = select_best_symmetric_leads(lead_candidates, centroid, 2)
+            else:
+                selected_leads = lead_candidates[:2]
             
             # 시각화
             # 구멍 및 보간 시각화
             holes_vis = img.copy()
-            # 검출된 구멍
-            for i, (cx, cy) in enumerate(hole_centers):
+            for cx, cy in hole_centers:
                 cv2.circle(holes_vis, (int(cx), int(cy)), 8, (0, 255, 0), 2)
-            # 보간된 구멍
             for cx, cy in interpolated_points:
                 cv2.circle(holes_vis, (int(cx), int(cy)), 8, (255, 0, 255), 2)
                 cv2.circle(holes_vis, (int(cx), int(cy)), 2, (255, 0, 255), -1)
-            # 대칭 쌍 표시
-            for pair in symmetric_pairs:
-                x1, y1 = pair['hole1']
-                x2, y2 = pair['hole2']
-                cv2.line(holes_vis, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 1)
-                mid_x, mid_y = int((x1 + x2) / 2), int((y1 + y2) / 2)
-                cv2.putText(holes_vis, f"Sym:{pair['symmetry_error']:.1f}", 
-                           (mid_x, mid_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
-            
-            cv2.putText(holes_vis, f"Detected: {len(hole_centers)}, Interpolated: {len(interpolated_points)}, Symmetric pairs: {len(symmetric_pairs)}", 
+            cv2.putText(holes_vis, f"Detected: {len(hole_centers)}, Interpolated: {len(interpolated_points)}", 
                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
             # 직선 시각화
             lines_vis = img.copy()
+            # 일반 선 (연한 회색)
             for x1, y1, x2, y2 in merged_lines:
-                cv2.line(lines_vis, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.putText(lines_vis, f"Total Lines: {len(merged_lines)}", (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                cv2.line(lines_vis, (x1, y1), (x2, y2), (128, 128, 128), 1)
+            # 몸체로 향하는 선 (초록색)
+            for line_info in body_lines:
+                x1, y1, x2, y2 = line_info['line']
+                cv2.line(lines_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                # 먼 쪽 끝점 표시
+                far_point = line_info['far_point']
+                cv2.circle(lines_vis, (int(far_point[0]), int(far_point[1])), 6, (0, 255, 0), -1)
+            cv2.putText(lines_vis, f"Total: {len(merged_lines)}, To Body: {len(body_lines)}", 
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             
             # LED 몸체 시각화
             body_vis = img.copy()
@@ -1034,14 +886,12 @@ def main():
                 overlay[:,:,2] = body_mask
                 body_vis = cv2.addWeighted(body_vis, 0.7, overlay, 0.3, 0)
             if centroid is not None:
-                cv2.circle(body_vis, centroid, 5, (0, 255, 255), -1)
-                cv2.putText(body_vis, "Center", (centroid[0]+10, centroid[1]-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                cv2.circle(body_vis, centroid, 8, (0, 255, 255), -1)
             
-            # 최종 결과 (개선된 시각화)
-            final_vis = visualize_results(img, hole_centers, interpolated_points, 
-                                        merged_lines, hull, centroid, selected_holes, 
-                                        scored_holes, validation_results)
+            # 최종 결과
+            final_vis = visualize_new_results(img, hole_centers, interpolated_points, 
+                                            all_lines, merged_lines, hull, centroid,
+                                            body_lines, lead_candidates, selected_leads, excluded_holes)
             
             # 창에 표시
             cv2.imshow('Holes & Interpolation', holes_vis)
@@ -1049,25 +899,21 @@ def main():
             cv2.imshow('LED Body', body_vis)
             cv2.imshow('Final Result', final_vis)
             
-            # 콘솔 출력 (개선된 정보)
-            status_str = "VALID" if validation_results['is_valid'] else "INVALID"
-            warning_count = len(validation_results.get('warnings', []))
+            # 콘솔 출력
+            print(f"\r[{images[idx]}] Body Lines:{len(body_lines)}, Excluded:{len(excluded_holes)}, Candidates:{len(lead_candidates)}, Selected:{len(selected_leads)}", end='')
             
-            print(f"\r[{images[idx]}] Holes:{len(hole_centers)}, Interp:{len(interpolated_points)}, "
-                  f"Sym_pairs:{len(symmetric_pairs)}, Lines:{len(merged_lines)}, "
-                  f"Candidates:{len(scored_holes)}, Selected:{len(selected_holes)}, "
-                  f"Status:{status_str}, Warnings:{warning_count}", end='')
-            
-            # 경고 메시지 출력
-            if validation_results.get('warnings'):
-                print("\nWarnings:")
-                for warning in validation_results['warnings']:
-                    print(f"  - {warning}")
-            
-            if validation_results.get('errors'):
-                print("\nErrors:")
-                for error in validation_results['errors']:
-                    print(f"  - {error}")
+            # 선택된 리드들의 상세 정보 출력
+            if selected_leads:
+                print()  # 새 줄
+                for i, lead in enumerate(selected_leads):
+                    cx, cy = lead['hole_pos']
+                    score = lead['score']
+                    dist_to_endpoint = lead['distance_to_endpoint']
+                    print(f"  LED {i+1}: Position({cx:.1f}, {cy:.1f}), Score: {score:.1f}, EndpointDist: {dist_to_endpoint:.1f}")
+                
+                # 제외된 구멍들 정보 출력
+                if excluded_holes:
+                    print(f"  Excluded {len(excluded_holes)} holes near LED body (within {led_body_exclusion}px)")
             
         except Exception as e:
             print(f"\nError processing image: {e}")
@@ -1089,7 +935,7 @@ def main():
         elif key == ord('s'):  # 결과 저장
             if 'final_vis' in locals():
                 base_name = os.path.splitext(images[idx])[0]
-                save_name = f"{base_name}_improved_led_detection_result.png"
+                save_name = f"{base_name}_new_led_detection_result.png"
                 cv2.imwrite(save_name, final_vis)
                 print(f"\nSaved: {save_name}")
     
