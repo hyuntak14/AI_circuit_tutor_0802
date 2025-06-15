@@ -9,7 +9,116 @@ except ImportError:
     SKLEARN_AVAILABLE = False
     print("Warning: sklearn not available. Using simple clustering instead.")
 
+
+def find_additional_leads_from_lines(body_lines, selected_leads, centroid, hull, 
+                                   min_distance_from_body=30, max_total_leads=2):
+    """
+    이미 선택된 리드가 부족할 때, Body Lines의 끝점에서 추가 리드 찾기
+    """
+    if len(selected_leads) >= max_total_leads:
+        return selected_leads
     
+    # 이미 선택된 리드의 위치들
+    existing_positions = [lead['hole_pos'] for lead in selected_leads]
+    
+    # Body Lines의 먼 끝점들을 후보로 수집
+    line_endpoints = []
+    for line_info in body_lines:
+        far_point = line_info['far_point']
+        fx, fy = far_point
+        
+        # 이미 선택된 위치와 너무 가깝지 않은지 확인
+        too_close_to_existing = False
+        for ex, ey in existing_positions:
+            if math.hypot(fx - ex, fy - ey) < 20:  # 20픽셀 이내면 중복
+                too_close_to_existing = True
+                break
+        
+        if too_close_to_existing:
+            continue
+        
+        # LED 몸체와의 거리 확인
+        if hull is not None:
+            body_distance = abs(cv2.pointPolygonTest(hull, (float(fx), float(fy)), True))
+            if body_distance < min_distance_from_body:
+                continue
+        
+        # 중심에서의 거리
+        distance_from_center = math.hypot(fx - centroid[0], fy - centroid[1])
+        
+        line_endpoints.append({
+            'position': (fx, fy),
+            'distance_from_center': distance_from_center,
+            'line_info': line_info,
+            'source': 'line_endpoint'  # 구멍이 아닌 선 끝점임을 표시
+        })
+    
+    # 거리 순으로 정렬 (멀수록 우선)
+    line_endpoints.sort(key=lambda x: x['distance_from_center'], reverse=True)
+    
+    # 필요한 만큼 추가
+    additional_leads = []
+    needed = max_total_leads - len(selected_leads)
+    
+    for i in range(min(needed, len(line_endpoints))):
+        endpoint = line_endpoints[i]
+        additional_leads.append({
+            'hole_pos': endpoint['position'],  # 호환성을 위해 같은 키 사용
+            'line_info': endpoint['line_info'],
+            'distance_to_endpoint': 0,  # 끝점 자체이므로 0
+            'score': endpoint['distance_from_center'] * 2,  # 점수 계산
+            'source': 'line_endpoint'
+        })
+    
+    # 대칭성 고려하여 최종 선택
+    if len(selected_leads) == 1 and len(additional_leads) > 0:
+        # 기존 1개와 가장 대칭적인 것 선택
+        best_symmetric = find_best_symmetric_endpoint(selected_leads[0], additional_leads, centroid)
+        if best_symmetric:
+            return selected_leads + [best_symmetric]
+    
+    return selected_leads + additional_leads
+
+def find_best_symmetric_endpoint(existing_lead, candidates, centroid):
+    """기존 리드와 가장 대칭적인 끝점 찾기"""
+    if not candidates or not centroid:
+        return candidates[0] if candidates else None
+    
+    ex, ey = existing_lead['hole_pos']
+    cx, cy = centroid
+    
+    # 기존 리드의 각도
+    existing_angle = math.atan2(ey - cy, ex - cx)
+    existing_dist = math.hypot(ex - cx, ey - cy)
+    
+    best_candidate = None
+    best_score = float('-inf')
+    
+    for candidate in candidates:
+        px, py = candidate['hole_pos']
+        
+        # 후보의 각도와 거리
+        candidate_angle = math.atan2(py - cy, px - cx)
+        candidate_dist = math.hypot(px - cx, py - cy)
+        
+        # 대칭성 점수 계산
+        # 180도 차이에 가까울수록 높은 점수
+        angle_diff = abs(abs(existing_angle - candidate_angle) - math.pi)
+        angle_score = 1.0 / (1.0 + angle_diff * 10)
+        
+        # 거리 유사성
+        dist_diff = abs(existing_dist - candidate_dist)
+        dist_score = 1.0 / (1.0 + dist_diff * 0.1)
+        
+        total_score = angle_score * 100 + dist_score * 50 + candidate['score'] * 0.1
+        
+        if total_score > best_score:
+            best_score = total_score
+            best_candidate = candidate
+    
+    return best_candidate
+
+
 # --- 간단한 DBSCAN 대체 함수 ---
 def simple_dbscan(points, eps, min_samples):
     """sklearn이 없을 때 사용하는 간단한 클러스터링"""
@@ -394,17 +503,7 @@ def detect_lines_to_body(lines, centroid, hull, direction_threshold=0.6,
                         body_proximity_threshold=30, min_line_length=20):
     """
     LED 몸체로 향하는 선들을 검출합니다.
-    
-    Args:
-        lines: 검출된 선분들 [(x1, y1, x2, y2), ...]
-        centroid: LED 몸체의 중심점 (cx, cy)
-        hull: LED 몸체의 convex hull
-        direction_threshold: 선의 방향이 중심을 향해야 하는 임계값 (0~1)
-        body_proximity_threshold: 선의 한쪽 끝이 몸체에 얼마나 가까워야 하는지
-        min_line_length: 최소 선의 길이
-    
-    Returns:
-        list: LED 몸체로 향하는 선들의 정보
+    LED 몸체에서 멀리 있는 선들을 우선적으로 선택합니다.
     """
     if not lines or not centroid:
         return []
@@ -424,12 +523,24 @@ def detect_lines_to_body(lines, centroid, hull, direction_threshold=0.6,
         dist1 = math.hypot(x1 - cx, y1 - cy)
         dist2 = math.hypot(x2 - cx, y2 - cy)
         
-        # 몸체와의 근접성 체크 (hull이 있을 경우)
+        # LED 몸체와의 거리 계산 (hull이 있을 경우)
         body_dist1 = float('inf')
         body_dist2 = float('inf')
+        min_body_distance = float('inf')
+        
         if hull is not None:
             body_dist1 = abs(cv2.pointPolygonTest(hull, (float(x1), float(y1)), True))
             body_dist2 = abs(cv2.pointPolygonTest(hull, (float(x2), float(y2)), True))
+            
+            # 선 전체에서 LED 몸체까지의 최소 거리 계산
+            # 선을 따라 여러 점을 샘플링하여 체크
+            num_samples = int(line_length / 5) + 1
+            for i in range(num_samples + 1):
+                t = i / num_samples
+                px = x1 + t * (x2 - x1)
+                py = y1 + t * (y2 - y1)
+                dist_to_body = abs(cv2.pointPolygonTest(hull, (float(px), float(py)), True))
+                min_body_distance = min(min_body_distance, dist_to_body)
         
         # 선의 방향 벡터
         line_vec = np.array([x2 - x1, y2 - y1])
@@ -444,7 +555,7 @@ def detect_lines_to_body(lines, centroid, hull, direction_threshold=0.6,
         
         # 방향성 체크: 선이 중심을 향하고 있는지
         dot1 = np.dot(line_vec_norm, to_center1_norm)
-        dot2 = np.dot(-line_vec_norm, to_center2_norm)  # 반대 방향도 체크
+        dot2 = np.dot(-line_vec_norm, to_center2_norm)
         
         # 조건 체크
         is_pointing_to_center = max(dot1, dot2) > direction_threshold
@@ -456,24 +567,49 @@ def detect_lines_to_body(lines, centroid, hull, direction_threshold=0.6,
                 near_point = (x1, y1)
                 far_point = (x2, y2)
                 far_distance = dist2
+                far_body_distance = body_dist2
             else:
                 near_point = (x2, y2)
                 far_point = (x1, y1)
                 far_distance = dist1
+                far_body_distance = body_dist1
             
             body_lines.append({
                 'line': line,
                 'near_point': near_point,
                 'far_point': far_point,
                 'far_distance': far_distance,
+                'far_body_distance': far_body_distance,  # LED 몸체에서 먼 끝점의 거리
+                'min_body_distance': min_body_distance,  # 선 전체의 최소 몸체 거리
                 'length': line_length,
                 'direction_score': max(dot1, dot2)
             })
     
-    # 거리 순으로 정렬 (멀수록 우선)
-    body_lines.sort(key=lambda x: x['far_distance'], reverse=True)
+    # LED 몸체에서 가장 멀리 있는 선들을 우선적으로 선택
+    # 1차: 먼 끝점이 몸체에서 멀수록 우선
+    # 2차: 선 전체가 몸체에서 멀수록 우선
+    # 3차: 중심에서 멀수록 우선
+    body_lines.sort(key=lambda x: (
+        x['far_body_distance'],      # LED 몸체에서 먼 끝점의 거리 (클수록 좋음)
+        x['min_body_distance'],      # 선 전체의 최소 몸체 거리 (클수록 좋음)
+        x['far_distance']            # 중심에서의 거리 (클수록 좋음)
+    ), reverse=True)
     
     return body_lines
+
+def select_best_body_lines(body_lines, max_lines=2, min_body_distance=20):
+    """LED 몸체에서 충분히 멀리 있는 최상위 선들만 선택"""
+    selected_lines = []
+    
+    for line_info in body_lines:
+        if line_info['far_body_distance'] >= min_body_distance:
+            selected_lines.append(line_info)
+            
+            if len(selected_lines) >= max_lines:
+                break
+    
+    return selected_lines
+
 
 def find_holes_near_line_endpoints(body_lines, hole_centers, hull, max_distance=25, body_exclusion_distance=50):
     """
@@ -840,6 +976,9 @@ def main():
             body_lines = detect_lines_to_body(merged_lines, centroid, hull, 
                                             direction_threshold, body_proximity, min_length)
             
+            body_lines = select_best_body_lines(body_lines, max_lines=2, min_body_distance=30)
+
+
             # 5-2. 선의 끝점 근처 구멍들 찾기
             lead_candidates, excluded_holes = find_holes_near_line_endpoints(
                 body_lines, all_holes, hull, hole_distance, led_body_exclusion)
@@ -850,6 +989,14 @@ def main():
             else:
                 selected_leads = lead_candidates[:2]
             
+
+            if len(selected_leads) < 2 and body_lines:
+                print(f"\nOnly {len(selected_leads)} leads found, searching line endpoints...")
+                selected_leads = find_additional_leads_from_lines(
+                    body_lines, selected_leads, centroid, hull,
+                    min_distance_from_body=led_body_exclusion
+                )
+
             # 시각화
             # 구멍 및 보간 시각화
             holes_vis = img.copy()
