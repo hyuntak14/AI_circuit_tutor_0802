@@ -37,7 +37,7 @@ class SimpleCircuitConverter:
         # 컴포넌트별 검출기들
         detectors = {
             'resistor': ResistorEndpointDetector(),
-            'led': LedEndpointDetector(max_hole_dist=15, visualize=False),
+            'led': LedEndpointDetector(),
             'diode': DiodeEndpointDetector(),
             'ic': ICChipPinDetector(),
             'wire': WireDetector(kernel_size=4),
