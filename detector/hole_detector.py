@@ -337,15 +337,23 @@ class HoleDetector:
             # (5) 노이즈(레이블 -1) 포인트를 가장 가까운 군집으로 재할당
             if (noise_idx := np.where(labels_r == -1)[0]).size:
                 # 각 군집의 투영값 평균 계산
-                centers = {
-                    lab: projections[labels_r == lab].mean()
-                    for lab in set(labels_r) if lab != -1
-                }
-                for i in noise_idx:
-                    val = projections[i]
-                    # 가장 가까운 군집 레이블 찾기
-                    nearest = min(centers.keys(), key=lambda lab: abs(centers[lab] - val))
-                    labels_r[i] = nearest
+                centers = {}
+                for lab in set(labels_r):
+                    if lab == -1: 
+                        continue
+                    pts = projections[labels_r == lab]
+                    if pts.size:
+                        centers[lab] = pts.mean()
+
+                # centers가 비어 있으면(모든 점이 노이즈일 때) 재할당 스킵
+                if centers and noise_idx.size:
+                    for i in noise_idx:
+                        val = projections[i]
+                        nearest = min(
+                            centers.keys(),
+                            key=lambda lab: abs(centers[lab] - val)
+                        )
+                        labels_r[i] = nearest
 
             # (6) 레이블별로 모아서 x 기준으로 정렬 → 하나의 row_net
             for rl in sorted(set(labels_r)):
@@ -439,7 +447,7 @@ class HoleDetector:
                 M, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC, ransacReprojThreshold=3.0)
                 if M is not None:
                     holes = [tuple(p) for p in cv2.transform(tpl_scaled.reshape(-1, 1, 2), M).reshape(-1, 2)]
-        nets = self.get_board_nets(holes, base_img=image, show=visualize_nets)
+        nets = self.get_board_nets(holes, base_img=image, show=False)
         if visualize_nets:
             return holes, nets
         else:

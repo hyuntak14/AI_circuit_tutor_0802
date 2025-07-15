@@ -18,6 +18,7 @@ from ui.perspective_editor import select_and_transform
 from circuit_generator import generate_circuit
 from checker.error_checker import ErrorChecker
 
+<<<<<<< HEAD
 class SimpleCircuitConverter:
     def __init__(self):
         self.detector = FasterRCNNDetector(r'D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/model/fasterrcnn.pt')
@@ -25,6 +26,453 @@ class SimpleCircuitConverter:
             template_csv_path='detector/template_holes_complete.csv',
             template_image_path='detector/breadboard18.jpg',
             max_nn_dist=20.0
+=======
+import random
+WINDOW = 'AR Tutor'
+
+# 소자별 색상 (data.yaml 기준)
+class_colors = {
+    'Breadboard': (0, 128, 255),
+    'Capacitor':  (255, 0, 255),
+    'Diode':      (0, 255, 0),
+    'IC':         (204, 102, 255),
+    'LED':        (102, 0, 102),
+    'Line_area':  (255, 0, 0),
+    'Resistor':   (200, 170, 0)
+}
+
+def visualize_component_nets(img, component_pins, hole_to_net, parent, find):
+    """
+    • img: 회로판 원본(BGR)
+    • component_pins: [{'class','box','pins',…}, …]
+    • hole_to_net: {(x,y): raw_net_id, …}
+    • parent, find: Union-Find 자료구조 함수
+    """
+    import cv2
+    import numpy as np
+
+    # 1) Net ID별 고유 색상 생성
+    #    (Union-Find으로 최종 병합된 ID set)
+    final_nets = set(find(n) for n in hole_to_net.values())
+    rng = np.random.default_rng(1234)
+    net_colors = {
+        net_id: tuple(int(c) for c in rng.integers(0,256,3))
+        for net_id in final_nets
+    }
+
+    overlay = img.copy()
+    # 2) 각 컴포넌트 핀마다, nearest_net → 최종 Net ID 찾고, 원 그리기
+    for comp in component_pins:
+        for pt in comp['pins']:
+            # raw 위치(pt)와 hole_to_net 키 중 최소거리로 매핑
+            closest = min(
+                hole_to_net.keys(),
+                key=lambda h: (h[0]-pt[0])**2 + (h[1]-pt[1])**2
+            )
+            raw_net = hole_to_net[closest]
+            net_id = find(raw_net)
+            color = net_colors[net_id]
+            cv2.circle(overlay, pt, 6, color, -1)
+            # Net ID 텍스트 표시
+            cv2.putText(overlay, str(net_id), (pt[0]+8, pt[1]-8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    # 3) 반투명하게 합성
+    alpha = 0.6
+    out = cv2.addWeighted(overlay, alpha, img, 1-alpha, 0)
+
+    # 4) 창에 띄우기
+    cv2.imshow('Component ↔ Net Mapping', out)
+    cv2.waitKey(0)
+    cv2.destroyWindow('Component ↔ Net Mapping')
+
+
+def visualize_cluster_connections(row_nets, component_pins):
+    # 1) 전체 net_id 추출 & 색상 매핑
+    net_ids = {entry['net_id']
+               for _, clusters in row_nets
+               for entry in clusters}
+    colors = {nid: (random.random(), random.random(), random.random())
+              for nid in net_ids}
+
+    plt.figure(figsize=(8,6))
+    # 2) 클러스터(구멍) 시각화
+    for row_idx, clusters in row_nets:
+        for entry in clusters:
+            nid = entry['net_id']
+            pts = entry['pts']              # pts: [(x,y), …]
+            xs = [int(round(x)) for x,y in pts]
+            ys = [int(round(y)) for x,y in pts]
+            plt.scatter(xs, ys,
+                        c=[colors[nid]],
+                        s=20,
+                        label=f'Net {nid}')
+
+    # 3) 소자 핀 연결 시각화
+    for comp in component_pins:
+        name = comp['class']
+        pins = comp['pins']               # [(x1,y1),(x2,y2)]
+        xs = [p[0] for p in pins]
+        ys = [p[1] for p in pins]
+        plt.plot(xs, ys,
+                 marker='x',
+                 linestyle='-',
+                 linewidth=1)
+        plt.text(xs[0], ys[0], name,
+                 fontsize=8, va='bottom')
+
+    # 4) 축 뒤집기 & 범례
+    plt.gca().invert_yaxis()    
+    # 중복 레이블 제거
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys(),
+               bbox_to_anchor=(1.02,1), loc='upper left')
+    plt.tight_layout()
+    # 1) 파일로 저장
+    out_path = 'cluster_connections.png'
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
+    img = cv2.imread(out_path)
+    if img is not None:
+        cv2.imshow('Cluster Connections', img)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    else:
+        print(f"이미지 로드 실패: {out_path}")
+
+
+def imread_unicode(path):
+    with open(path, 'rb') as f:
+        data = np.frombuffer(f.read(), dtype=np.uint8)
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+
+def manual_pin_selection(image, box, expected_count):
+    x1, y1, x2, y2 = box
+    roi = image[y1:y2, x1:x2].copy()
+    pins = []
+    win = 'Manual Pin Selection'
+    def mouse_cb(event, x, y, flags, param):
+        nonlocal pins
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if len(pins) < expected_count:
+                pins.append((x1 + x, y1 + y))
+                cv2.circle(roi, (x, y), 5, (0, 0, 255), -1)
+                cv2.imshow(win, roi)
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            # remove last
+            if pins:
+                pins.pop()
+                # redraw
+                temp = image[y1:y2, x1:x2].copy()
+                for px, py in pins:
+                    cv2.circle(temp, (px - x1, py - y1), 5, (0, 0, 255), -1)
+                roi[:] = temp
+
+    cv2.namedWindow(win)
+    cv2.setMouseCallback(win, mouse_cb)
+    cv2.imshow(win, roi)
+    while True:
+        if len(pins) == expected_count:
+            break
+        if cv2.waitKey(1) == 27:  # ESC to cancel
+            break
+    cv2.destroyWindow(win)
+    return pins
+
+
+def unified_labeler(image, class_colors, initial_labels=None):
+    root = tk.Tk()
+    root.withdraw()
+    win = 'Label Editor'
+    labels = initial_labels.copy() if initial_labels else []
+    drawing = False
+    ix, iy = -1, -1
+    canvas = image.copy()
+    class_list = list(class_colors.keys())
+
+    def redraw():
+        nonlocal canvas
+        canvas = image.copy()
+        for cls, (x1,y1,x2,y2) in labels:
+            color = class_colors.get(cls, (0,255,255))
+            cv2.rectangle(canvas, (x1,y1), (x2,y2), color, 2)
+            cv2.putText(canvas, cls, (x1, y1-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        cv2.imshow(WINDOW, canvas)
+        
+
+    def mouse_cb(event, x, y, flags, param):
+        nonlocal drawing, ix, iy, labels
+        if event == cv2.EVENT_LBUTTONDOWN:
+            drawing = True
+            ix, iy = x, y
+        elif event == cv2.EVENT_MOUSEMOVE and drawing:
+            tmp = canvas.copy()
+            cv2.rectangle(tmp, (ix,iy), (x,y), (255,255,255), 1)
+            cv2.imshow(WINDOW, tmp)
+        elif event == cv2.EVENT_LBUTTONUP and drawing:
+            drawing = False
+            x1_, x2_ = sorted([ix, x])
+            y1_, y2_ = sorted([iy, y])
+            if abs(x2_-x1_) < 10 or abs(y2_-y1_) < 10:
+                redraw()
+                return
+            prompt = "클래스를 선택하세요:\n" + \
+                     "\n".join(f"{i+1}. {c}" for i,c in enumerate(class_list))
+            idx = simpledialog.askinteger(
+                "새 클래스 선택", prompt,
+                minvalue=1, maxvalue=len(class_list)
+            )
+            if idx:
+                cls = class_list[idx-1]
+                labels.append((cls, (x1_,y1_,x2_,y2_)))
+            redraw()
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            for i, (cls, (x1_,y1_,x2_,y2_)) in enumerate(labels):
+                if x1_ <= x <= x2_ and y1_ <= y <= y2_:
+                    action = simpledialog.askstring(
+                        "삭제/수정",
+                        f"'{cls}' 선택됨:\n'd'→삭제, 'r'→이름 변경"
+                    )
+                    if action == 'd':
+                        labels.pop(i)
+                    elif action == 'r':
+                        new_name = simpledialog.askstring("이름 변경", "새 이름:")
+                        if new_name:
+                            labels[i] = (new_name, (x1_,y1_,x2_,y2_))
+                    break
+            redraw()
+
+
+    cv2.setMouseCallback(WINDOW, mouse_cb)
+    redraw()
+    while True:
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    return labels
+
+
+def modify_detections(image, detections):
+    """
+    • image: 원본 영상 (np.ndarray)
+    • detections: [(cls, score, (x1,y1,x2,y2)), ...]
+    
+    자동 검출된 결과 위에, 
+    • 좌클릭 드래그 → 새 박스 그리기 
+    • 우클릭 클릭 → 클래스 목록에서 선택 후 추가
+    • 'q' 키 누르면 완료
+    """
+    import cv2
+    import tkinter as tk
+    from tkinter import simpledialog
+
+    # 전역 class_colors 사용
+    class_list = list(class_colors.keys())
+
+    # 복사본에 그리기
+    canvas = image.copy()
+    for cls, score, box in detections:
+        x1,y1,x2,y2 = box
+        color = class_colors.get(cls, (0,255,255))
+        cv2.rectangle(canvas, (x1,y1), (x2,y2), color, 2)
+        cv2.putText(canvas, cls, (x1, y1-5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    # 드래그 변수
+    drawing = False
+    ix, iy = -1, -1
+
+    def redraw():
+        nonlocal canvas
+        canvas = image.copy()
+        for cls, score, (x1,y1,x2,y2) in detections:
+            color = class_colors.get(cls, (0,255,255))
+            cv2.rectangle(canvas, (x1,y1), (x2,y2), color, 2)
+            cv2.putText(canvas, cls, (x1, y1-5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        cv2.imshow(WINDOW, canvas)
+
+    def mouse_cb(event, x, y, flags, param):
+        nonlocal drawing, ix, iy, detections
+
+        # 드래그 시작
+        if event == cv2.EVENT_LBUTTONDOWN:
+            drawing = True
+            ix, iy = x, y
+
+        # 드래그 중
+        elif event == cv2.EVENT_MOUSEMOVE and drawing:
+            tmp = canvas.copy()
+            cv2.rectangle(tmp, (ix,iy), (x,y), (255,255,255), 1)
+            cv2.imshow(win, tmp)
+
+        # 드래그 종료 → 박스 확정 후 클래스 선택
+        elif event == cv2.EVENT_LBUTTONUP and drawing:
+            drawing = False
+            x1_, x2_ = sorted([ix, x])
+            y1_, y2_ = sorted([iy, y])
+            if abs(x2_-x1_) < 10 or abs(y2_-y1_) < 10:
+                redraw()
+                return
+
+            # tkinter 창 띄워서 클래스 선택
+            root = tk.Tk()
+            root.withdraw()
+            prompt = "추가할 클래스 선택:\n" + \
+                     "\n".join(f"{i+1}. {c}" for i,c in enumerate(class_list))
+            idx = simpledialog.askinteger("Class 선택", prompt,
+                                          minvalue=1, maxvalue=len(class_list))
+            root.destroy()
+            if idx:
+                cls = class_list[idx-1]
+                detections.append((cls, 1.0, (x1_, y1_, x2_, y2_)))
+            redraw()
+
+    '''win = "Modify Detections"
+    cv2.namedWindow(win)
+    cv2.setMouseCallback(win, mouse_cb)
+    redraw()
+
+    # 'q' 를 누를 때까지 대기
+    while True:
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cv2.destroyWindow(win)'''
+    return detections
+
+
+
+def main():
+    
+    component_pins = []
+    root = tk.Tk()
+    root.withdraw()
+
+    # Detector 초기화
+    detector     = FasterRCNNDetector(r'D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/model/fasterrcnn.pt')
+    hole_det = HoleDetector(
+    template_csv_path='detector/template_holes_complete.csv',
+    template_image_path='detector/breadboard18.jpg',
+    max_nn_dist=20.0
+)
+
+    wire_det     = WireDetector(kernel_size=4)
+    resistor_det = ResistorEndpointDetector()
+    led_det      = LedEndpointDetector(max_hole_dist=15, visualize=False)
+    diode_det    = DiodeEndpointDetector()  # diode endpoints detector
+    ic_det       = ICChipPinDetector()       # IC 칩 핀 위치 detector
+
+    # 이미지 로드 및 브레드보드 검출
+    img = imread_unicode(r'D:\Hyuntak\lab\AR_circuit_tutor\breadboard_project\breadboard99.jpg')
+    comps = detector.detect(img)
+    bb = next((b for c,_,b in comps if c.lower()=='breadboard'), None)
+    if bb is None:
+        raise ValueError('Breadboard 미검출')
+    warped, _  = select_and_transform(img.copy(), bb)
+    warped_raw = warped.copy()
+
+    # 객체 검출 및 라벨링
+    detections = detector.detect(warped)
+    auto_comps = [(cls, box) for cls,_,box in detections if cls.lower()!='breadboard']
+
+    vis_img = warped.copy()
+    for cls, box in auto_comps:
+        color = class_colors.get(cls, (0,255,255))
+        x1,y1,x2,y2 = box
+        cv2.rectangle(vis_img, (x1,y1), (x2,y2), color, 2)
+        cv2.putText(vis_img, cls, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    cv2.namedWindow(WINDOW)
+
+    final_labels = unified_labeler(vis_img, class_colors, auto_comps[:])
+    all_comps = [(cls, 1.0, box) for cls, box in final_labels]
+    all_comps = modify_detections(warped, all_comps)
+
+    # 1) 구멍 좌표 검출
+    holes = hole_det.detect_holes(warped_raw,visualize_nets=True)
+    # 2) 전체 넷 클러스터링
+    #nets, row_nets  = hole_det.get_board_nets(holes,base_img=warped_raw, show=True)
+
+    # 2-1) 행별 그룹(cluster) 생성 (template alignment 적용된 points 기준)
+    #hole_det.visualize_clusters(base_img=warped_raw,clusters=nets,affine_pts=holes )
+
+    
+
+    # hole_to_net 맵 생성
+    hole_to_net = {}
+    for row_idx, clusters in row_nets:
+        for entry in clusters:
+            net_id = entry['net_id']
+            for x, y in entry['pts']:
+                hole_to_net[(int(round(x)), int(round(y)))] = net_id
+
+
+     # ─── 2) Union-Find 초기화 & net 색상 매핑 ────────────
+    parent = { net_id: net_id for net_id in set(hole_to_net.values()) }
+    def find(u):
+        if parent[u] != u:
+            parent[u] = find(parent[u])
+        return parent[u]
+
+    import numpy as np
+    rng = np.random.default_rng(1234)
+    final_nets = set(find(n) for n in hole_to_net.values())
+    net_colors = {
+        net_id: tuple(int(c) for c in rng.integers(0, 256, 3))
+        for net_id in final_nets
+    }
+
+
+
+    for cls, _, box in all_comps:
+        x1, y1, x2, y2 = box
+        expected = 8 if cls == 'IC' else 2
+        pins = []
+
+        if cls == 'Resistor':
+            pins = resistor_det.extract(warped, box)
+        elif cls == 'LED':
+            pins = led_det.extract(warped, box, holes)
+        elif cls == 'Diode':
+            pins = diode_det.extract(warped, box)
+        elif cls == 'IC':
+            x1, y1, x2, y2 = box  # 수정된 부분
+            roi = warped_raw[y1:y2, x1:x2]
+            ics = ic_det.detect(roi)
+            if ics:
+                det = ics[0]
+                pins = [(x1 + px, y1 + py) for px, py in det['pin_points']]
+
+
+
+
+            
+        elif cls == 'Line_area':
+            # 선영역: WireDetector로 endpoints 2개 추출
+            roi = warped_raw[y1:y2, x1:x2]
+            segs = wire_det.detect_wires(roi)
+            endpoints, _ = wire_det.select_best_endpoints(segs)
+            if endpoints:
+                pins = [(x1 + pt[0], y1 + pt[1]) for pt in endpoints]
+        # 자동 검출 미달 시 None/tuple -> list 변환
+        # 2) 튜플·None 체크 → 리스트로 정규화
+        if pins is None:
+            pins_list = []
+        elif isinstance(pins, tuple):
+           pins_list = list(pins)
+        else:
+            pins_list = pins
+
+        # 3) 유효 좌표 검증: 개수 및 None 제거
+        valid = (
+            len(pins_list) == expected and
+            all(isinstance(pt, tuple) and None not in pt for pt in pins_list)
+>>>>>>> 43c99fd46a94b88ad6ea9a12de5345dc93c72d7d
         )
         self.wire_det = WireDetector(kernel_size=4)
         self.resistor_det = ResistorEndpointDetector()

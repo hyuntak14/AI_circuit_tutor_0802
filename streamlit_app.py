@@ -5,9 +5,12 @@ import numpy as np
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 import pandas as pd
+<<<<<<< HEAD
 import tkinter as tk
 from tkinter import simpledialog
 import matplotlib.pyplot as plt
+=======
+>>>>>>> 43c99fd46a94b88ad6ea9a12de5345dc93c72d7d
 
 from detector.fasterrcnn_detector import FasterRCNNDetector
 from detector.hole_detector import HoleDetector
@@ -18,7 +21,10 @@ from detector.ic_chip_detector import ICChipPinDetector
 from detector.wire_detector import WireDetector
 from circuit_generator import generate_circuit
 from checker.error_checker import ErrorChecker
+<<<<<<< HEAD
 from diagram import get_n_clicks
+=======
+>>>>>>> 43c99fd46a94b88ad6ea9a12de5345dc93c72d7d
 
 # 절대경로 설정
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +41,7 @@ TOTAL_PAGES = 12
 # 세션 상태 초기화
 if 'page' not in st.session_state:
     st.session_state.page = 1
+<<<<<<< HEAD
 if 'processing' not in st.session_state:
     st.session_state.processing = False
 
@@ -85,10 +92,20 @@ def show_navigation(page_num, prev_enabled=True, next_enabled=True):
     if cols[2].button("Next ▶️", key=f"next_{page_num}", disabled=not next_enabled):
         st.session_state.page = min(TOTAL_PAGES, page_num + 1)
         st.rerun()
+=======
+
+# Utility: 이미지 축소
+@st.cache_data
+def resize_image(img, max_w, max_h):
+    h, w = img.shape[:2]
+    scale = min(max_w / w, max_h / h, 1.0)
+    return cv2.resize(img, (int(w * scale), int(h * scale))), scale
+>>>>>>> 43c99fd46a94b88ad6ea9a12de5345dc93c72d7d
 
 # 1) 업로드 & 원본 표시
 def page_1_upload():
     st.title("📸 Breadboard to Schematic")
+<<<<<<< HEAD
     st.write("Upload an image of your breadboard to start the analysis.")
     
     uploaded = st.file_uploader("Choose a breadboard image", type=["jpg", "png", "jpeg"])
@@ -869,6 +886,167 @@ def page_7_value_input():
         st.info("No resistors detected in this circuit")
     
     show_navigation(7, next_enabled=True)
+=======
+    uploaded = st.file_uploader("Upload breadboard image", type=["jpg","png","jpeg"])
+    if uploaded:
+        data = np.frombuffer(uploaded.read(), np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        disp_img, scale = resize_image(img, MAX_DISPLAY_WIDTH, MAX_DISPLAY_HEIGHT)
+        st.session_state.img = img
+        st.session_state.disp_img = disp_img
+        st.session_state.scale = scale
+        st.success("Image uploaded successfully.")
+        if st.button("Next ▶️", key="next_1"):
+            st.session_state.page += 1
+    else:
+        st.info("Please upload an image to proceed.")
+
+# 2) 코너 조정
+def page_2_corner_adjust():
+    st.subheader("Step 2: Adjust 4 Corner Handles")
+    img = st.session_state.img
+    disp_img = st.session_state.disp_img
+    scale = st.session_state.scale
+    h, w = img.shape[:2]
+    detector = FasterRCNNDetector(model_path=MODEL_PATH)
+    dets = detector.detect(img)
+    bb = next((box for cls,_,box in dets if cls.lower()=="breadboard"), None)
+    if bb is None:
+        st.error("Breadboard not detected.")
+        return
+    default_pts = [(bb[0],bb[1]),(bb[2],bb[1]),(bb[2],bb[3]),(bb[0],bb[3])]
+    scaled_pts = [(int(x*scale), int(y*scale)) for x,y in default_pts]
+    HANDLE_SIZE = 16
+    handles = []
+    for cx, cy in scaled_pts:
+        handles.append({
+            "type":"rect","left":cx-HANDLE_SIZE//2,"top":cy-HANDLE_SIZE//2,
+            "width":HANDLE_SIZE,"height":HANDLE_SIZE,
+            "stroke":"red","strokeWidth":2,
+            "fill":"rgba(255,0,0,0.3)","cornerColor":"red",
+            "cornerSize":6,"transparentCorners":False
+        })
+    canvas = st_canvas(
+        background_image=Image.fromarray(cv2.cvtColor(disp_img,cv2.COLOR_BGR2RGB)),
+        width=disp_img.shape[1], height=disp_img.shape[0],
+        drawing_mode="transform", initial_drawing={"objects":handles}, key="corner"
+    )
+    if canvas.json_data and canvas.json_data.get("objects"):
+        src = [[(o["left"]+o["width"]/2)/scale, (o["top"]+o["height"]/2)/scale]
+               for o in canvas.json_data["objects"]]
+    else:
+        src = np.float32(default_pts)
+    M = cv2.getPerspectiveTransform(np.float32(src), np.float32([[0,0],[w,0],[w,h],[0,h]]))
+    warped = cv2.warpPerspective(img, M, (w,h))
+    st.session_state.warped = warped
+    st.session_state.warped_raw = warped.copy()
+    cols = st.columns([1,1,1])
+    if cols[0].button("◀️ Previous", key="prev_2"): st.session_state.page -= 1
+    if cols[2].button("Next ▶️", key="next_2"): st.session_state.page += 1
+
+# 3) 변환 이미지
+def page_3_transformed():
+    st.subheader("Step 3: Transformed Image")
+    st.image(cv2.cvtColor(st.session_state.warped, cv2.COLOR_BGR2RGB), use_container_width=True)
+    cols = st.columns([1,1,1])
+    if cols[0].button("◀️ Previous", key="prev_3"): st.session_state.page -= 1
+    if cols[2].button("Next ▶️", key="next_3"): st.session_state.page += 1
+
+# 4) 컴포넌트 검출 및 편집
+def page_4_component_edit():
+    st.subheader("Step 4: Component Detection & Manual Edit")
+    warped = st.session_state.warped
+    disp_warp, scale = resize_image(warped, MAX_DISPLAY_WIDTH, MAX_DISPLAY_HEIGHT)
+    disp_rgb = cv2.cvtColor(disp_warp, cv2.COLOR_BGR2RGB)
+    detector = FasterRCNNDetector(model_path=MODEL_PATH)
+    raw = detector.detect(warped)
+    comps = [{'class':c,'bbox':b} for c,_,b in raw if c.lower()!='breadboard']
+    handles = []
+    COLOR_MAP = {'Resistor':'#e63946','LED':'#f4a261','Diode':'#457b9d','IC':'#9d4edd',
+                 'Line_area':'#2a9d8f','Capacitor':'#6c757d'}
+    for comp in comps:
+        x1,y1,x2,y2 = comp['bbox']
+        col = COLOR_MAP.get(comp['class'],'#6c757d')
+        handles.append({
+            "type":"rect","left":x1*scale,"top":y1*scale,
+            "width":(x2-x1)*scale,"height":(y2-y1)*scale,
+            "stroke":col,"fill":f"{col}33","cornerColor":col,"cornerSize":6
+        })
+    canvas = st_canvas(background_image=Image.fromarray(disp_rgb),
+                       width=disp_warp.shape[1], height=disp_warp.shape[0],
+                       drawing_mode="transform", initial_drawing={"objects":handles}, key="comp")
+    if canvas.json_data and canvas.json_data.get("objects"):
+        updated = []
+        for idx, o in enumerate(canvas.json_data["objects"]):
+            l,t = o['left']/scale, o['top']/scale
+            w_box,h_box = o['width']/scale, o['height']/scale
+            updated.append({'class': comps[idx]['class'],
+                            'bbox':(int(l),int(t),int(l+w_box),int(t+h_box))})
+    else:
+        updated = comps
+    st.session_state.final_comps = updated
+    cols = st.columns([1,1,1])
+    if cols[0].button("◀️ Previous", key="prev_4"): st.session_state.page -= 1
+    if cols[2].button("Next ▶️", key="next_4"): st.session_state.page += 1
+
+# 5) 구멍 검출 및 넷 클러스터링
+# --- Page 5: Hole Detection & Net Clustering ---
+# --- Page 5: Hole Detection & Net Clustering ---
+# --- Page 5: Hole Detection & Net Clustering ---
+def page_5_template_holes():
+    st.subheader("Step 5: Hole Detection & Net Clustering")
+    warped_raw = st.session_state.warped_raw
+
+    # 화면 표시용 축소 이미지 및 스케일 계산
+    disp_warp, scale = resize_image(warped_raw, MAX_DISPLAY_WIDTH, MAX_DISPLAY_HEIGHT)
+
+    # HoleDetector 초기화 & 구멍 검출
+    hd = HoleDetector(
+        template_csv_path=os.path.join(BASE_DIR, "detector", "template_holes_complete.csv"),
+        template_image_path=os.path.join(BASE_DIR, "detector", "breadboard18.jpg"),
+        max_nn_dist=20.0
+    )
+    holes = hd.detect_holes(warped_raw)
+    st.write(f"Detected holes: {len(holes)} points")
+
+    # 넷 클러스터링 (윈도우 없이)
+    nets, row_nets = hd.get_board_nets(holes, base_img=warped_raw, show=False)
+    st.write(f"Detected nets: {len(nets)} clusters")
+
+    # hole_to_net 맵 생성 (row_nets 기준)
+    hole_to_net = {}
+    for row_idx, clusters in row_nets:
+        for entry in clusters:
+            net_id = entry['net_id']
+            for x, y in entry['pts']:
+                hole_to_net[(int(round(x)), int(round(y)))] = net_id
+    st.session_state.hole_to_net = hole_to_net
+
+    # net_colors 생성
+    rng = np.random.default_rng(1234)
+    net_ids = sorted(set(hole_to_net.values()))
+    net_colors = {nid: tuple(int(c) for c in rng.integers(0, 256, 3)) for nid in net_ids}
+    st.session_state.net_colors = net_colors
+
+    # 시각화를 위한 오버레이 (홀별 넷 색상 표시)
+    vis = warped_raw.copy()
+    for (x, y), net_id in hole_to_net.items():
+        color = net_colors[net_id]
+        cv2.circle(vis, (int(x), int(y)), 4, color, -1)
+
+    # 축소 후 표시
+    disp_vis = cv2.resize(vis, (int(vis.shape[1] * scale), int(vis.shape[0] * scale)))
+    st.image(cv2.cvtColor(disp_vis, cv2.COLOR_BGR2RGB), use_container_width=True)
+
+    # 세션 변수 저장
+    st.session_state.holes = holes
+    st.session_state.row_nets = row_nets  
+
+    # navigation
+    cols = st.columns([1, 1, 1])
+    if cols[0].button("◀️ Previous", key="prev_5"): st.session_state.page -= 1
+    if cols[2].button("Next ▶️", key="next_5"): st.session_state.page += 1
+>>>>>>> 43c99fd46a94b88ad6ea9a12de5345dc93c72d7d
 
 # 8) 핀 좌표 수동 조정
 def page_8_manual_pin_adjustment():
@@ -1312,5 +1490,218 @@ def main():
         st.session_state.page = 1
         st.rerun()
 
+<<<<<<< HEAD
 if __name__ == "__main__":
     main()
+=======
+# --- Page 6: Pin Detection & Net Visualization ---
+def page_6_pin_detection():
+    st.subheader("Step 6: Pin Detection & Net Visualization")
+    warped = st.session_state.warped_raw
+
+    # --- 초기화: pin_results ---
+    if 'pin_results' not in st.session_state:
+        pin_results = []
+        for comp in st.session_state.final_comps:
+            cls = comp['class']
+            x1, y1, x2, y2 = comp['bbox']
+            # 자동 핀 검출
+            if cls == 'Resistor':
+                raw = ResistorEndpointDetector().extract(warped, comp['bbox'])
+                pins = raw or []
+            elif cls == 'LED':
+                result = LedEndpointDetector().extract(warped, comp['bbox'], st.session_state.holes)
+                pins = result.get('endpoints', []) if result else []
+            elif cls == 'Diode':
+                pins = DiodeEndpointDetector().extract(warped, comp['bbox']) or []
+            elif cls == 'IC':
+                ics = ICChipPinDetector().detect(warped)
+                pins = [(px + x1, py + y1) for px, py in ics[0]['pin_points']] if ics else []
+            elif cls == 'Line_area':
+                roi = warped[y1:y2, x1:x2]
+                segs = WireDetector().detect_wires(roi)
+                eps, _ = WireDetector().select_best_endpoints(segs)
+                pins = [(x1 + pt[0], y1 + pt[1]) for pt in eps] if eps else []
+            else:
+                pins = []
+            pin_results.append({'class': cls, 'bbox': (x1, y1, x2, y2), 'pins': pins})
+        st.session_state.pin_results = pin_results
+
+    # hole_to_net & net_colors 로드
+    hole_to_net = st.session_state.hole_to_net
+    net_colors = st.session_state.net_colors
+
+    # 1) Visualization Overlay
+    disp_vis, disp_scale = resize_image(warped.copy(), MAX_DISPLAY_WIDTH, MAX_DISPLAY_HEIGHT)
+    for comp in st.session_state.pin_results:
+        for px, py in comp['pins']:
+            closest = min(hole_to_net.keys(), key=lambda h: (h[0]-px)**2 + (h[1]-py)**2)
+            net_id = hole_to_net[closest]
+            color = net_colors[net_id]
+            cx, cy = int(px * disp_scale), int(py * disp_scale)
+            cv2.circle(disp_vis, (cx, cy), 6, color, -1)
+            cv2.putText(disp_vis, str(net_id), (cx+8, cy-8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    st.image(cv2.cvtColor(disp_vis, cv2.COLOR_BGR2RGB), use_container_width=True)
+
+    # 2) Component 선택 및 핀 수정 UI
+    options = [f"{i+1}: {c['class']}" for i, c in enumerate(st.session_state.pin_results)]
+    sel = st.selectbox("Select component to adjust pins", list(range(len(st.session_state.pin_results))), format_func=lambda i: options[i])
+    comp = st.session_state.pin_results[sel]
+    x1, y1, x2, y2 = comp['bbox']
+    expected = 8 if comp['class'] == 'IC' else 2
+    st.write(f"Adjust pins for **{comp['class']}** (expected **{expected}** points)")
+    roi = warped[y1:y2, x1:x2]
+    disp_roi, s = resize_image(roi, MAX_DISPLAY_WIDTH, MAX_DISPLAY_HEIGHT)
+    canvas = st_canvas(
+        background_image=Image.fromarray(cv2.cvtColor(disp_roi, cv2.COLOR_BGR2RGB)),
+        width=disp_roi.shape[1], height=disp_roi.shape[0], drawing_mode="point", key=f"pin_canvas_{sel}"
+    )
+    if canvas.json_data and canvas.json_data.get("objects"):
+        pts = []
+        for o in canvas.json_data["objects"]:
+            cx = o['left'] + o['width']/2
+            cy = o['top'] + o['height']/2
+            pts.append((cx/s + x1, cy/s + y1))
+        if len(pts) == expected:
+            comp['pins'] = pts
+            st.success(f"Updated pins: {pts}")
+        else:
+            st.warning(f"Click exactly {expected} points. Current: {len(pts)}")
+
+    # navigation
+    cols = st.columns([1,1,1])
+    if cols[0].button("◀️ Previous", key="prev_6"): st.session_state.page -= 1
+    if cols[2].button("Next ▶️", key="next_6"): st.session_state.page += 1
+
+# 7) 값 입력
+def page_7_value_input():
+    st.subheader("Step 7: Component Values Input")
+    vals = {}
+    for pr in st.session_state.pin_results:
+        if pr['class']=='Resistor':
+            vals[tuple(pr['bbox'])] = st.number_input(
+                f"Resistance (Ω) for bbox {pr['bbox']}", value=10.0, key=str(pr['bbox']))
+        else:
+            vals[tuple(pr['bbox'])] = 0.0
+    st.session_state.comp_values = vals
+    cols = st.columns([1,1,1])
+    if cols[0].button("◀️ Previous", key="prev_7"): st.session_state.page -= 1
+    if cols[2].button("Next ▶️", key="next_7"): st.session_state.page += 1
+
+# 8) 핀 수동 수정
+def page_8_fix_pins():
+    st.subheader("Step 8: Fix Pins (Manual)")
+    fixed = []
+    for i, pr in enumerate(st.session_state.pin_results):
+        coords = []
+        for j, p in enumerate(pr['pins']):
+            x = st.number_input(f"Pin {j+1} X for {pr['class']}", value=float(p[0]), key=f"x_{i}_{j}")
+            y = st.number_input(f"Pin {j+1} Y for {pr['class']}", value=float(p[1]), key=f"y_{i}_{j}")
+            coords.append((x,y))
+        fixed.append({'class':pr['class'],'bbox':pr['bbox'],'pins':coords})
+    st.session_state.fixed_pins = fixed
+    cols = st.columns([1,1,1])
+    if cols[0].button("◀️ Previous", key="prev_8"): st.session_state.page -= 1
+    if cols[2].button("Next ▶️", key="next_8"): st.session_state.page += 1
+
+# 9) 전원 선택
+def page_9_power_selection():
+    st.subheader("Step 9: Power Terminal Selection")
+    disp = st.session_state.disp_img
+    canvas = st_canvas(
+        background_image=Image.fromarray(cv2.cvtColor(disp,cv2.COLOR_BGR2RGB)),
+        width=disp.shape[1], height=disp.shape[0], drawing_mode="point", key="power_sel"
+    )
+    pts = [(o['left'], o['top']) for o in canvas.json_data.get('objects',[])] if canvas.json_data else []
+    if len(pts) >= 2:
+        st.session_state.power_pairs = pts[:2]
+    st.write("Power Pairs:", st.session_state.power_pairs if 'power_pairs' in st.session_state else [])
+    cols = st.columns([1,1,1])
+    if cols[0].button("◀️ Previous", key="prev_9"): st.session_state.page -= 1
+    if cols[2].button("Next ▶️", key="next_9"): st.session_state.page += 1
+
+# 10) 회로 생성
+def page_10_generate_circuit():
+    st.subheader("Step 10: Generate Circuit")
+    try:
+        generate_circuit(
+            components=st.session_state.fixed_pins,
+            holes=st.session_state.holes,
+            nets=st.session_state.nets,
+            values=st.session_state.comp_values,
+            power_pairs=st.session_state.power_pairs,
+            base_img=st.session_state.warped_raw
+        )
+        img_path = os.path.join(BASE_DIR, "circuit.jpg")
+        spice_path = os.path.join(BASE_DIR, "circuit.spice")
+        if os.path.exists(img_path):
+            img = cv2.imread(img_path)
+            st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
+            st.session_state.circuit_img = img
+        if os.path.exists(spice_path):
+            with open(spice_path, 'rb') as f:
+                st.download_button("Download SPICE File", f, file_name="circuit.spice")
+            st.session_state.spice_file = spice_path
+    except Exception as e:
+        st.error(f"Circuit generation error: {e}")
+    cols = st.columns([1,1,1])
+    if cols[0].button("◀️ Previous", key="prev_10"): st.session_state.page -= 1
+    if cols[2].button("Next ▶️", key="next_10"): st.session_state.page += 1
+
+# 11) 오류 검사
+def page_11_error_check():
+    st.subheader("Step 11: Error Checking")
+    try:
+        ec = ErrorChecker(st.session_state.spice_file)
+        errors = ec.run_all_checks()
+        df = pd.DataFrame(errors)
+        st.table(df)
+        st.session_state.errors = errors
+    except Exception as e:
+        st.error(f"Error checking failed: {e}")
+    cols = st.columns([1,1,1])
+    if cols[0].button("◀️ Previous", key="prev_11"): st.session_state.page -= 1
+    if cols[2].button("Next ▶️", key="next_11"): st.session_state.page += 1
+
+# 12) 최종 결과 요약
+def page_12_summary():
+    st.subheader("Step 12: Summary")
+    st.write("**Components:**", st.session_state.final_comps)
+    st.write("**Pins:**", st.session_state.fixed_pins)
+    st.write("**Values:**", st.session_state.comp_values)
+    st.write("**Power Pairs:**", st.session_state.power_pairs)
+    st.write("**Errors:**", st.session_state.errors)
+    if st.button("Restart ▶️", key="restart"):  
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        st.session_state.page = 1
+
+# 메인 페이지 네비게이션
+page = st.session_state.page
+if page == 1:
+    page_1_upload()
+elif page == 2:
+    page_2_corner_adjust()
+elif page == 3:
+    page_3_transformed()
+elif page == 4:
+    page_4_component_edit()
+elif page == 5:
+    page_5_template_holes()
+elif page == 6:
+    page_6_pin_detection()
+elif page == 7:
+    page_7_value_input()
+elif page == 8:
+    page_8_fix_pins()
+elif page == 9:
+    page_9_power_selection()
+elif page == 10:
+    page_10_generate_circuit()
+elif page == 11:
+    page_11_error_check()
+elif page == 12:
+    page_12_summary()
+else:
+    st.error("Invalid step. Restarting...")
+>>>>>>> 43c99fd46a94b88ad6ea9a12de5345dc93c72d7d
