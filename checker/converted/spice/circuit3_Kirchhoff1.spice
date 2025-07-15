@@ -1,10 +1,11 @@
 * Multi-Power Circuit Netlist
 * Generated with 1 power sources
+* Converted from: circuit3_Kirchhoff1.graphml
 * 
-V1 181 9 5.0
-R1 9 177 100.0
-R2 177 181 100.0
-R3 173 177 100.0
+V1 1 2 0.0
+R1 2 3 1000
+R2 3 1 2000
+R3 3 1 3000
 * 
 .MODEL DMOD D
 .MODEL LEDMOD D(IS=1E-12 N=2)

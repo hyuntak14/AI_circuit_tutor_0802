@@ -1,10 +1,11 @@
 * Multi-Power Circuit Netlist
 * Generated with 1 power sources
+* Converted from: circuit5_superposition_b.graphml
 * 
-V1 181 9 5.0
-R1 9 177 100.0
-R2 177 181 100.0
-R3 173 177 100.0
+V1 1 2 20.0
+R1 3 1 2000
+R2 2 3 3000
+R3 3 1 1000
 * 
 .MODEL DMOD D
 .MODEL LEDMOD D(IS=1E-12 N=2)

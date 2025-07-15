@@ -1,0 +1,51 @@
+<svg width="350" height="350" xmlns="http://www.w3.org/2000/svg">
+<rect width="100%" height="100%" fill="url(#grid)" />
+<g transform="rotate(0.0, 175.0, 250.0)">
+<line x1="150.0" y1="250.0" x2="160.0" y2="250.0" stroke="black" stroke-width="1.5"/>
+<line x1="190.0" y1="250.0" x2="200.0" y2="250.0" stroke="black" stroke-width="1.5"/>
+<circle cx="175.0" cy="250.0" r="15" fill="white" stroke="black" stroke-width="1.5"/>
+<line x1="168.0" y1="250.0" x2="173.0" y2="250.0" stroke="black" stroke-width="1.5"/>
+<line x1="170.5" y1="247.5" x2="170.5" y2="252.5" stroke="black" stroke-width="1.5"/>
+<line x1="177.0" y1="250.0" x2="182.0" y2="250.0" stroke="black" stroke-width="1.5"/>
+<text x="175.0" y="230.0" text-anchor="middle" font-weight="bold" font-size="12">v1</text>
+<text x="175.0" y="277.0" text-anchor="middle" font-size="10">5.0</text>
+</g>
+<line x1="100" y1="250" x2="150.0" y2="250.0" stroke="black" stroke-width="1.5"/>
+<line x1="250" y1="250" x2="200.0" y2="250.0" stroke="black" stroke-width="1.5"/>
+<g transform="rotate(90.0, 250.0, 175.0)">
+<line x1="220.0" y1="175.0" x2="230.0" y2="175.0" stroke="black" stroke-width="1.5"/>
+<path d="M 230.0,175.0 L 236.66666666666666,185.0 L 243.33333333333334,165.0 L 250.0,185.0 L 256.66666666666663,165.0 L 263.33333333333337,185.0 L 270.0,175.0" stroke="black" fill="none" stroke-width="1.5"/>
+<line x1="270.0" y1="175.0" x2="280.0" y2="175.0" stroke="black" stroke-width="1.5"/>
+</g>
+<text x="250.0" y="160.0" text-anchor="middle" font-weight="bold" font-size="12">r1</text>
+<text x="250.0" y="190.0" text-anchor="middle" font-size="10">100.0</text>
+<line x1="250" y1="100" x2="250.0" y2="145.0" stroke="black" stroke-width="1.5"/>
+<line x1="250" y1="250" x2="250.0" y2="205.0" stroke="black" stroke-width="1.5"/>
+<g transform="rotate(-45.0, 175.0, 175.0)">
+<line x1="145.0" y1="175.0" x2="155.0" y2="175.0" stroke="black" stroke-width="1.5"/>
+<path d="M 155.0,175.0 L 161.66666666666666,185.0 L 168.33333333333331,165.0 L 175.0,185.0 L 181.66666666666669,165.0 L 188.33333333333334,185.0 L 195.0,175.0" stroke="black" fill="none" stroke-width="1.5"/>
+<line x1="195.0" y1="175.0" x2="205.0" y2="175.0" stroke="black" stroke-width="1.5"/>
+</g>
+<text x="175.0" y="160.0" text-anchor="middle" font-weight="bold" font-size="12">r2</text>
+<text x="175.0" y="190.0" text-anchor="middle" font-size="10">100.0</text>
+<line x1="250" y1="100" x2="153.78679656440357" y2="196.21320343559643" stroke="black" stroke-width="1.5"/>
+<line x1="100" y1="250" x2="196.21320343559643" y2="153.78679656440357" stroke="black" stroke-width="1.5"/>
+<g transform="rotate(0.0, 175.0, 100.0)">
+<line x1="145.0" y1="100.0" x2="155.0" y2="100.0" stroke="black" stroke-width="1.5"/>
+<path d="M 155.0,100.0 L 161.66666666666666,110.0 L 168.33333333333331,90.0 L 175.0,110.0 L 181.66666666666669,90.0 L 188.33333333333334,110.0 L 195.0,100.0" stroke="black" fill="none" stroke-width="1.5"/>
+<line x1="195.0" y1="100.0" x2="205.0" y2="100.0" stroke="black" stroke-width="1.5"/>
+</g>
+<text x="175.0" y="85.0" text-anchor="middle" font-weight="bold" font-size="12">r3</text>
+<text x="175.0" y="115.0" text-anchor="middle" font-size="10">100.0</text>
+<line x1="100" y1="100" x2="145.0" y2="100.0" stroke="black" stroke-width="1.5"/>
+<line x1="250" y1="100" x2="205.0" y2="100.0" stroke="black" stroke-width="1.5"/>
+<text x="105" y="95" font-family="sans-serif" font-size="10" fill="blue">Node 173</text>
+<circle cx="100" cy="100" r="3" fill="black"/>
+<text x="255" y="95" font-family="sans-serif" font-size="10" fill="blue">Node 177</text>
+<circle cx="250" cy="100" r="3" fill="black"/>
+<text x="105" y="245" font-family="sans-serif" font-size="10" fill="blue">Node 181</text>
+<circle cx="100" cy="250" r="3" fill="black"/>
+<text x="255" y="245" font-family="sans-serif" font-size="10" fill="blue">Node 9 (GND)</text>
+<circle cx="250" cy="250" r="3" fill="black"/>
+<path d="M240 255 l 20 0 M245 260 l 10 0 M250 265 l 0 0" stroke="black" stroke-width="1.5"/>
+</svg>

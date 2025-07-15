@@ -25,10 +25,21 @@ import re
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.patches import FancyBboxPatch, Circle
+import webbrowser
+import subprocess
+import sys
+from PIL import Image
+import tkinter as tk
+from tkinter import messagebox
+# 1) 파일 상단에 import 추가
+from spice_converter import (
+    SpiceParser, CircuitLayout, SVGGenerator, 
+    convert_spice_to_svg, convert_spice_to_schemdraw_auto_png
+)
 # 실습 주제 맵 (기존과 동일)
 topic_map = {
     0: "test용 회로", 1: "병렬회로", 2: "직렬회로", 3: "키르히호프 2법칙", 4: "키르히호프 2법칙",
-    5: "중첩의 원리", 6: "오실로스코프 실습1", 7: "오실로스코프 실습2",
+    5: "중첩의 원리", 6: "LED Test 회로", 7: "오실로스코프 실습2",
     8: "반파정류회로", 9: "반파정류회로2", 10: "비반전 증폭기"
 }
 
@@ -611,10 +622,125 @@ def draw_spice_based_circuit(components, output_path):
         return False
 
 
-# 3) generate_output_files 함수 수정 (기존 함수 전체 교체)
-def generate_output_files(mapped, stable_power_pairs, voltage, output_spice, output_img):
+
+# circuit_generator.py에 추가할 코드들
+
+
+
+# 2) SVG 회로도 생성 함수 추가
+def generate_svg_circuit_diagram(spice_filepath, output_svg_path, show_in_window=True):
     """
-    출력 파일들 생성 (디버깅 강화)
+    spice_converter.py를 활용한 고품질 SVG 회로도 생성 및 표시
+    """
+    print(f"\n🎨 SVG 회로도 생성: {spice_filepath} → {output_svg_path}")
+    
+    try:
+        # spice_converter의 convert_spice_to_svg 함수 사용
+        convert_spice_to_svg(spice_filepath, output_svg_path)
+        
+        # PNG 버전 경로
+        png_path = output_svg_path.replace('.svg', '.png')
+        
+        print(f"✅ SVG 회로도 생성 성공:")
+        print(f"   - SVG: {output_svg_path}")
+        
+        # PNG 파일 존재 확인
+        if os.path.exists(png_path):
+            print(f"   - PNG: {png_path}")
+        
+        # 창으로 표시
+        if show_in_window:
+            display_svg_circuit(output_svg_path, png_path, show_in_window=True)
+        
+        return True, output_svg_path, png_path
+        
+    except Exception as e:
+        print(f"❌ SVG 회로도 생성 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, None, None
+
+
+def generate_schemdraw_circuit_diagram(spice_filepath, output_png_path, show_in_window=True):
+    """
+    spice_converter.py의 schemdraw 기능을 활용한 전문적 회로도 생성 및 표시
+    """
+    print(f"\n🔧 Schemdraw 회로도 생성: {spice_filepath} → {output_png_path}")
+    
+    try:
+        # spice_converter의 schemdraw 자동 레이아웃 사용
+        #convert_spice_to_schemdraw_auto_png(spice_filepath, output_png_path)
+        
+        print(f"✅ Schemdraw 회로도 생성 성공: {output_png_path}")
+        
+        # 창으로 표시
+        if show_in_window and os.path.exists(output_png_path):
+            show_png_in_window(output_png_path)
+        
+        return True, output_png_path
+        
+    except Exception as e:
+        print(f"❌ Schemdraw 회로도 생성 실패: {e}")
+        return False, None
+
+
+def generate_multiple_circuit_formats(spice_filepath, base_output_path):
+    """
+    여러 포맷의 회로도를 동시 생성
+    """
+    print(f"\n🎯 다중 포맷 회로도 생성: {base_output_path}")
+    
+    base_name = os.path.splitext(base_output_path)[0]
+    success_count = 0
+    generated_files = []
+    
+    # 1) SVG + PNG (spice_converter 사용)
+    svg_path = f"{base_name}_spice.svg"
+    svg_success, svg_file, png_file = generate_svg_circuit_diagram(spice_filepath, svg_path)
+    if svg_success:
+        success_count += 1
+        generated_files.extend([svg_file, png_file])
+    
+    # 2) Schemdraw PNG (전문적 레이아웃)
+    schemdraw_path = f"{base_name}_schemdraw.png"
+    schemdraw_success, schemdraw_file = generate_schemdraw_circuit_diagram(spice_filepath, schemdraw_path)
+    if schemdraw_success:
+        success_count += 1
+        generated_files.append(schemdraw_file)
+    
+    # 3) 기존 matplotlib 방식 (fallback)
+    try:
+        # SPICE 파싱 후 기존 방식으로도 생성
+        spice_components = parse_spice_file(spice_filepath)
+        if spice_components:
+            # 연결된 회로도
+            connected_path = f"{base_name}_connected.jpg"
+            if draw_connected_circuit_diagram(spice_components, connected_path):
+                success_count += 1
+                generated_files.append(connected_path)
+                
+            # 전통적 회로도
+            traditional_path = f"{base_name}_traditional.jpg"
+            if create_traditional_circuit_diagram(spice_components, traditional_path):
+                success_count += 1
+                generated_files.append(traditional_path)
+                
+    except Exception as e:
+        print(f"⚠️ 기존 matplotlib 방식 실패: {e}")
+    
+    print(f"✅ 다중 포맷 생성 완료: {success_count}개 파일")
+    for i, file_path in enumerate(generated_files, 1):
+        file_type = "SVG" if file_path.endswith('.svg') else \
+                   "PNG" if file_path.endswith('.png') else "JPG"
+        print(f"   {i}. {file_type}: {file_path}")
+    
+    return success_count > 0, generated_files
+
+
+# 3) generate_output_files 함수 수정 (기존 함수 교체)
+def generate_output_files(mapped, stable_power_pairs, voltage, output_spice, output_img, show_in_window=True):
+    """
+    출력 파일들 생성 (SVG 회로도 중심, diagram 출력 제거)
     """
     print("  📁 출력 파일 생성 중...")
     
@@ -647,42 +773,117 @@ def generate_output_files(mapped, stable_power_pairs, voltage, output_spice, out
     # 🔧 핵심: 병합된 넷 번호로 SPICE 생성
     toSPICE_multi_power(df, stable_power_pairs, voltage, output_spice)
     
-    # 기존 회로도 생성 시도
-    try:
-        generate_circuit_diagrams(G, voltage, output_img, stable_power_pairs)
-    except Exception as e:
-        print(f"  ⚠️ 기존 회로도 생성 실패: {e}")
+    # 🎨 SVG 회로도 생성 및 표시 (diagram 대신)
+    print("\n" + "="*60)
+    print("🎨 SVG 회로도 생성 및 창으로 표시")
+    print("="*60)
     
-    # SPICE 기반 연결된 회로도 생성
-    try:
-        if os.path.exists(output_spice):
-            spice_components = parse_spice_file(output_spice)
-            if spice_components:
-                print(f"\n✅ SPICE 파싱 성공: {len(spice_components)}개 컴포넌트")
-                
-                # 연결된 회로도들 생성
-                connected_path = output_img.replace('.jpg', '_connected.jpg')
-                traditional_path = output_img.replace('.jpg', '_traditional.jpg')
-                
-                if draw_connected_circuit_diagram(spice_components, connected_path):
-                    print(f"✅ 연결된 회로도: {connected_path}")
-                
-                if create_traditional_circuit_diagram(spice_components, traditional_path):
-                    print(f"✅ 전통적 회로도: {traditional_path}")
-                    
-            else:
-                print("❌ SPICE 파싱 결과가 비어있습니다")
-        else:
-            print(f"❌ SPICE 파일을 찾을 수 없습니다: {output_spice}")
+    svg_success = False
+    if os.path.exists(output_spice):
+        # SVG 회로도 생성 (spice_converter 사용)
+        base_name = os.path.splitext(output_img)[0]
+        svg_path = f"{base_name}_circuit.svg"
+        
+        svg_success, svg_file, png_file = generate_svg_circuit_diagram(
+            output_spice, svg_path, show_in_window=show_in_window
+        )
+        
+        if svg_success:
+            print(f"✅ SVG 회로도 생성 및 표시 성공!")
+            print(f"   - SVG 파일: {svg_file}")
+            if png_file and os.path.exists(png_file):
+                print(f"   - PNG 파일: {png_file}")
+        
+        # 추가로 Schemdraw 버전도 생성
+        schemdraw_path = f"{base_name}_schemdraw.png"
+        schemdraw_success, schemdraw_file = generate_schemdraw_circuit_diagram(
+            output_spice, schemdraw_path, show_in_window=False  # 하나만 창으로 보기
+        )
+        
+        if schemdraw_success:
+            print(f"✅ Schemdraw 회로도도 생성: {schemdraw_file}")
             
-    except Exception as e:
-        print(f"❌ SPICE 기반 회로도 생성 중 오류: {e}")
+    else:
+        print(f"❌ SPICE 파일을 찾을 수 없습니다: {output_spice}")
     
-    # 비교 분석
+    # ❌ 기존 diagram 관련 코드들 모두 제거
+    # generate_circuit_diagrams() 호출 제거
+    # matplotlib 기반 회로도 생성 제거
+    
+    # 비교 분석만 유지
     try:
         compare_and_notify(G, output_img, checker_dir="checker")
     except Exception as e:
         print(f"  ⚠️ 회로 비교 실패: {e}")
+
+
+# 4) 회로도 생성 옵션을 제어하는 설정 함수
+def set_circuit_diagram_options(use_svg=True, use_schemdraw=True, use_matplotlib_fallback=True):
+    """
+    회로도 생성 옵션 설정
+    """
+    global CIRCUIT_OPTIONS
+    CIRCUIT_OPTIONS = {
+        'use_svg': use_svg,
+        'use_schemdraw': use_schemdraw, 
+        'use_matplotlib_fallback': use_matplotlib_fallback
+    }
+    
+    print(f"🔧 회로도 생성 옵션 설정:")
+    print(f"   - SVG (spice_converter): {'✅' if use_svg else '❌'}")
+    print(f"   - Schemdraw: {'✅' if use_schemdraw else '❌'}")
+    print(f"   - Matplotlib Fallback: {'✅' if use_matplotlib_fallback else '❌'}")
+
+# 기본 옵션 설정
+CIRCUIT_OPTIONS = {
+    'use_svg': True,
+    'use_schemdraw': True,
+    'use_matplotlib_fallback': True
+}
+
+
+# 5) 사용 예시 함수
+def demo_svg_circuit_generation():
+    """
+    SVG 회로도 생성 데모
+    """
+    print("🚀 SVG 회로도 생성 데모 시작")
+    
+    # 테스트용 컴포넌트 데이터
+    test_components = [
+        {"name": "V1", "class": "VoltageSource", "value": 5.0, "nodes": (1, 0)},
+        {"name": "R1", "class": "Resistor", "value": 1000, "nodes": (1, 2)}, 
+        {"name": "R2", "class": "Resistor", "value": 2000, "nodes": (2, 0)},
+        {"name": "C1", "class": "Capacitor", "value": 0.001, "nodes": (2, 0)}
+    ]
+    
+    # 임시 SPICE 파일 생성
+    test_spice = "test_circuit.spice"
+    with open(test_spice, 'w') as f:
+        f.write("* Test Circuit\n")
+        f.write("V1 1 0 5.0\n")
+        f.write("R1 1 2 1000\n") 
+        f.write("R2 2 0 2000\n")
+        f.write("C1 2 0 0.001\n")
+        f.write(".END\n")
+    
+    # SVG 회로도 생성
+    test_output = "test_circuit_diagram"
+    success, files = generate_multiple_circuit_formats(test_spice, test_output)
+    
+    if success:
+        print("✅ 데모 성공!")
+        print("생성된 파일들:")
+        for file_path in files:
+            print(f"  - {file_path}")
+    else:
+        print("❌ 데모 실패")
+    
+    # 정리
+    if os.path.exists(test_spice):
+        os.remove(test_spice)
+
+
 
 # 4) generate_circuit 함수 마지막에 return 문 추가
 # generate_circuit 함수의 마지막 줄을 다음으로 교체:
@@ -727,10 +928,11 @@ def generate_circuit(
     output_spice: str,
     output_img: str,
     hole_to_net: dict,
-    power_pairs: list[tuple[int, float, int, float]] = None
+    power_pairs: list[tuple[int, float, int, float]] = None,
+    show_in_window: bool = True  # 새 옵션 추가
 ):
     """
-    완전히 안정화된 회로 생성 함수 (전류 흐름 기반)
+    완전히 안정화된 회로 생성 함수 (SVG 창 표시 옵션 추가)
     """
     print("🔧 완전 안정화된 회로 생성 시작...")
     
@@ -749,12 +951,15 @@ def generate_circuit(
         stable_all_comps, stable_power_pairs, voltage, merged_nets, stable_hole_to_net
     )
     
-    # 🔧 4) 결과 파일 생성
-    generate_output_files(mapped, stable_power_pairs, voltage, output_spice, output_img)
+    # 🔧 4) 결과 파일 생성 (SVG 창 표시 포함)
+    generate_output_files(mapped, stable_power_pairs, voltage, output_spice, output_img, show_in_window)
     
     print(f"✅ 안정화된 회로 생성 완료!")
     print(f"   - 컴포넌트 개수: {len([m for m in mapped if m['class'] != 'VoltageSource'])}")
     print(f"   - 전원 개수: {len(stable_power_pairs)}")
+    
+    if show_in_window:
+        print(f"   - SVG 회로도가 창으로 표시됩니다")
     
     return mapped, stable_hole_to_net
 
@@ -1266,13 +1471,192 @@ def visualize_circuit_graph(G, out_path='circuit_graph.png'):
     plt.close()
     print(f"Circuit graph saved to {out_path}")
 
+# 2) SVG 뷰어 함수들
+def show_svg_in_browser(svg_path):
+    """SVG 파일을 기본 브라우저에서 열기"""
+    try:
+        # 절대 경로로 변환
+        abs_path = os.path.abspath(svg_path)
+        file_url = f"file://{abs_path}"
+        
+        webbrowser.open(file_url)
+        print(f"✅ 브라우저에서 SVG 열기: {svg_path}")
+        return True
+    except Exception as e:
+        print(f"❌ 브라우저 열기 실패: {e}")
+        return False
 
-# 메인 실행부 (기존과 동일)
+def show_png_in_matplotlib_window(png_path):
+    """PNG 파일을 matplotlib 창으로 표시 (matplotlib 스타일)"""
+    try:
+        # matplotlib로 이미지 로드 및 표시
+        img = plt.imread(png_path)
+        
+        # 새 figure 생성
+        fig, ax = plt.subplots(figsize=(12, 8))
+        ax.imshow(img)
+        ax.axis('off')  # 축 숨기기
+        ax.set_title('Circuit Diagram (Generated from SPICE)', fontsize=14, fontweight='bold', pad=20)
+        
+        # 창 제목 설정
+        fig.canvas.manager.set_window_title('Circuit Diagram Viewer')
+        
+        # 여백 조정
+        plt.tight_layout()
+        
+        # 창 표시 (non-blocking)
+        plt.show(block=False)
+        
+        print(f"✅ matplotlib 창에서 회로도 표시: {png_path}")
+        return True
+    except Exception as e:
+        print(f"❌ matplotlib 창 표시 실패: {e}")
+        return False
+
+def show_png_in_window(png_path):
+    """PNG 파일을 PIL 이미지 창으로 보기"""
+    try:
+        img = Image.open(png_path)
+        img.show()  # 시스템 기본 이미지 뷰어로 열기
+        print(f"✅ 이미지 창에서 PNG 보기: {png_path}")
+        return True
+    except Exception as e:
+        print(f"❌ 이미지 창 열기 실패: {e}")
+        return False
+
+def show_svg_with_system_viewer(svg_path):
+    """시스템 기본 프로그램으로 SVG 열기"""
+    try:
+        if sys.platform.startswith('win'):
+            # Windows
+            subprocess.run(['start', svg_path], shell=True, check=True)
+        elif sys.platform.startswith('darwin'):
+            # macOS
+            subprocess.run(['open', svg_path], check=True)
+        else:
+            # Linux
+            subprocess.run(['xdg-open', svg_path], check=True)
+        
+        print(f"✅ 시스템 뷰어로 SVG 열기: {svg_path}")
+        return True
+    except Exception as e:
+        print(f"❌ 시스템 뷰어 열기 실패: {e}")
+        return False
+
+
+
+
+def display_svg_circuit(svg_path, png_path=None, show_in_window=True):
+    """
+    SVG 회로도를 창으로 표시 (여러 방법 시도)
+    """
+    if not show_in_window:
+        return
+    
+    print(f"\n👁️ SVG 회로도 창으로 표시: {svg_path}")
+    
+    success = False
+
+
+        # 1순위: PNG를 matplotlib 창으로 표시 ⭐
+    if png_path and os.path.exists(png_path):
+        if show_png_in_matplotlib_window(png_path):
+            success = True
+
+        # 2순위: PNG가 있으면 이미지 뷰어로 보기
+    if not success and png_path and os.path.exists(png_path):
+        if show_png_in_window(png_path):
+            success = True
+    
+    # 1순위: 브라우저에서 SVG 직접 보기
+    #if os.path.exists(svg_path):
+    #    if show_svg_in_browser(svg_path):
+    #        success = True
+    
+
+    
+    # 3순위: 시스템 기본 프로그램으로 SVG 열기
+    if not success and os.path.exists(svg_path):
+        if show_svg_with_system_viewer(svg_path):
+            success = True
+    
+    if not success:
+        print("❌ SVG 회로도 표시 실패 - 파일을 수동으로 확인하세요")
+
+
+
+# 6) 사용 예시 및 데모 함수
+def demo_svg_circuit_with_viewer():
+    """
+    SVG 회로도 생성 및 창 표시 데모
+    """
+    print("🚀 SVG 회로도 생성 및 창 표시 데모 시작")
+    
+    # 테스트용 컴포넌트 데이터
+    test_components = [
+        {"name": "V1", "class": "VoltageSource", "value": 5.0, "nodes": (1, 0)},
+        {"name": "R1", "class": "Resistor", "value": 1000, "nodes": (1, 2)}, 
+        {"name": "R2", "class": "Resistor", "value": 2000, "nodes": (2, 0)},
+        {"name": "C1", "class": "Capacitor", "value": 0.001, "nodes": (2, 0)}
+    ]
+    
+    # 임시 SPICE 파일 생성
+    test_spice = "demo_circuit.spice"
+    with open(test_spice, 'w') as f:
+        f.write("* Demo Circuit for SVG Viewer\n")
+        f.write("V1 1 0 5.0\n")
+        f.write("R1 1 2 1000\n") 
+        f.write("R2 2 0 2000\n")
+        f.write("C1 2 0 0.001\n")
+        f.write(".END\n")
+    
+    # SVG 회로도 생성 및 창 표시
+    test_svg = "demo_circuit.svg"
+    success, svg_file, png_file = generate_svg_circuit_diagram(test_spice, test_svg, show_in_window=True)
+    
+    if success:
+        print("✅ 데모 성공! SVG 회로도가 창에 표시됩니다.")
+        print(f"생성된 파일들:")
+        print(f"  - SVG: {svg_file}")
+        if png_file and os.path.exists(png_file):
+            print(f"  - PNG: {png_file}")
+            
+        # 사용자에게 알림
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo("SVG 회로도 생성 완료", 
+                              f"SVG 회로도가 생성되어 창에 표시됩니다.\n\n"
+                              f"파일 위치:\n{svg_file}")
+            root.destroy()
+        except:
+            pass
+    else:
+        print("❌ 데모 실패")
+    
+    # 정리
+    cleanup_files = [test_spice, test_svg, test_svg.replace('.svg', '.png')]
+    for file_path in cleanup_files:
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                print(f"🗑️ 임시 파일 삭제: {file_path}")
+            except:
+                pass
+
+# 7) 메인 실행부 수정
 if __name__ == "__main__":
+    print("🎨 Circuit Generator with SVG Viewer")
+    
+    # SVG 회로도 생성 및 창 표시 데모 실행
+    demo_svg_circuit_with_viewer()
+    
+    # 기존 테스트 코드 (diagram 제거)
+    print("\n🔧 기본 그래프 테스트...")
     mapped = [
+        {"name":"V1","class":"VoltageSource","value":5,"nodes":(1,0)},
         {"name":"R1","class":"Resistor","value":100,"nodes":(1,2)},
-        {"name":"C1","class":"Capacitor","value":0.001,"nodes":(2,3)},
-        {"name":"LED1","class":"LED","value":0,"nodes":(3,0)}
+        {"name":"C1","class":"Capacitor","value":0.001,"nodes":(2,0)}
     ]
     G = build_stable_circuit_graph(mapped)
-    visualize_circuit_graph(G)
+    print(f"✅ 그래프 생성 완료: {len(G.nodes)}개 노드, {len(G.edges)}개 엣지")

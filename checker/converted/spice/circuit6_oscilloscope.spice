@@ -1,10 +1,9 @@
 * Multi-Power Circuit Netlist
 * Generated with 1 power sources
+* Converted from: circuit6_oscilloscope.graphml
 * 
-V1 181 9 5.0
-R1 9 177 100.0
-R2 177 181 100.0
-R3 173 177 100.0
+V1 1 2 10.0
+R1 2 1 3000
 * 
 .MODEL DMOD D
 .MODEL LEDMOD D(IS=1E-12 N=2)

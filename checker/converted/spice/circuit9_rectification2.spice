@@ -1,0 +1,19 @@
+* Multi-Power Circuit Netlist
+* Generated with 1 power sources
+* Converted from: circuit9_rectification2.graphml
+* 
+V1 12 18 0.0
+D1 13 15 DMOD
+D2 15 16 DMOD
+D3 14 16 DMOD
+D4 13 14 DMOD
+C1 7 14 100.0u
+R1 6 8 1.5
+D1 7 17 LEDMOD
+D5 10 12 DMOD
+D2 9 11 LEDMOD
+R2 10 18 1.5
+* 
+.MODEL DMOD D
+.MODEL LEDMOD D(IS=1E-12 N=2)
+.END

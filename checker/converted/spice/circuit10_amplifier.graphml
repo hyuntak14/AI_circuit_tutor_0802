@@ -1,0 +1,56 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d0" for="node" attr.name="type" attr.type="string"/>
+<graph edgedefault="undirected"><node id="V1">
+  <data key="d0">component</data>
+</node>
+<node id="2">
+  <data key="d0">net</data>
+</node>
+<node id="4">
+  <data key="d0">net</data>
+</node>
+<node id="V2">
+  <data key="d0">component</data>
+</node>
+<node id="1">
+  <data key="d0">net</data>
+</node>
+<node id="3">
+  <data key="d0">net</data>
+</node>
+<node id="V3">
+  <data key="d0">component</data>
+</node>
+<node id="6">
+  <data key="d0">net</data>
+</node>
+<node id="R1">
+  <data key="d0">component</data>
+</node>
+<node id="R2">
+  <data key="d0">component</data>
+</node>
+<node id="X1">
+  <data key="d0">component</data>
+</node>
+<node id="5">
+  <data key="d0">net</data>
+</node>
+<node id=".END">
+  <data key="d0">component</data>
+</node>
+<edge source="V1" target="2"/>
+<edge source="V1" target="4"/>
+<edge source="2" target="V3"/>
+<edge source="2" target="R1"/>
+<edge source="4" target="R2"/>
+<edge source="4" target="X1"/>
+<edge source="V2" target="1"/>
+<edge source="V2" target="3"/>
+<edge source="1" target="R1"/>
+<edge source="1" target="X1"/>
+<edge source="3" target="X1"/>
+<edge source="V3" target="6"/>
+<edge source="6" target="R2"/>
+<edge source="X1" target="5"/>
+</graph></graphml>

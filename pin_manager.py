@@ -8,6 +8,7 @@ class PinManager:
         self.resistor_det = detectors['resistor']
         self.led_det = detectors['led']
         self.diode_det = detectors['diode']
+        self.capacitor_det = detectors['capacitor']
         self.ic_det = detectors['ic']
         self.wire_det = detectors['wire']
         self.hole_det = detectors['hole']
@@ -116,6 +117,22 @@ class PinManager:
                         )
                         return endpoints_warped, None
 
+            elif cls == 'Capacitor':
+                # 1) 원본 이미지 기반 검출 시도
+                if original_img is not None and original_bb is not None:
+                    # 올바른 인자 순서: box, warped, original_bb
+                    orig_box   = self._transform_to_original_coords(box, warped, original_bb)
+                    orig_holes = self._transform_holes_to_original(holes, original_bb, warped)
+
+
+                    # 원본 이미지에서 Capacitor endpoint 추출
+                    endpoints = self.capacitor_det.extract(original_img, orig_box, orig_holes)
+                    if endpoints:  # 리스트 반환만으로도 검사됨
+                        # original 좌표계를 warped 좌표계로 다시 변환
+                        endpoints_warped = self._transform_to_warped_coords(
+                            endpoints, original_bb, warped
+                        )
+                        return endpoints_warped, None
                 # 2) warped 이미지 기반 폴백 검출
                 endpoints = self.led_det.extract(warped, box, holes)
                 if endpoints:
@@ -150,6 +167,12 @@ class PinManager:
             if res and res[0] is not None and res[1] is not None:
                 return list(res), None
         elif cls == 'LED':
+            endpoints = self.led_det.extract(warped, box, holes)
+            if endpoints:
+                # 항상 [(x1,y1), (x2,y2)] 형태의 리스트를 돌려받으므로
+                return endpoints, None
+
+        elif cls == 'Capacitor':
             endpoints = self.led_det.extract(warped, box, holes)
             if endpoints:
                 # 항상 [(x1,y1), (x2,y2)] 형태의 리스트를 돌려받으므로

@@ -1,10 +1,12 @@
-# checker/Circuit_saver.py (개선된 버전)
+# checker/Circuit_saver.py (개선된 버전 - Netlist 지원)
 import cv2
 import numpy as np
 import networkx as nx
 from networkx.readwrite import write_graphml
 import tkinter as tk
 from tkinter import simpledialog, messagebox
+from datetime import datetime
+import os
 
 class CircuitSaver:
     def __init__(self, canvas_size=(800, 600)):
@@ -13,6 +15,7 @@ class CircuitSaver:
         self.node_positions = {}    # {node_name: (x, y)}
         self.node_classes = {}      # {node_name: class}
         self.node_models = {}       # {node_name: model} (for IC)
+        self.node_values = {}       # {node_name: value} (for R, C)
         self.edge_pins = {}         # {(src, tgt): (src_pin, tgt_pin)}
         self.next_node_id = 1
         self.edge_start = None
@@ -110,6 +113,8 @@ class CircuitSaver:
         val = 0.0
         if comp_class in ['Resistor', 'Capacitor']:
             val = simpledialog.askfloat(f"{comp_class} 값 입력", f"{comp_class} 값 입력:", minvalue=0.0) or 0.0
+        elif comp_class == 'VoltageSource':
+            val = simpledialog.askfloat("전압 값 입력", "전압 값 입력 (V):", minvalue=0.0) or 0.0
             
         root.destroy()
         return name, comp_class, val
@@ -179,10 +184,12 @@ class CircuitSaver:
             # Junction 노드 추가
             self.node_positions[j_pos_name] = (jx_pos, jy_pos)
             self.node_classes[j_pos_name] = 'Junction'
+            self.node_values[j_pos_name] = 0.0
             self.graph.add_node(j_pos_name, type='Junction', value=0.0)
             
             self.node_positions[j_neg_name] = (jx_neg, jy_neg)
-            self.node_classes[j_neg_name] = 'Junction'  
+            self.node_classes[j_neg_name] = 'Junction'
+            self.node_values[j_neg_name] = 0.0
             self.graph.add_node(j_neg_name, type='Junction', value=0.0)
             
             # 연결 생성 (전원의 양극과 음극 구분 필요)
@@ -193,6 +200,141 @@ class CircuitSaver:
             self.graph.add_edge(j_neg_name, n2)
             
             self.next_node_id += 2
+
+    def _generate_spice_netlist(self):
+        """회로 그래프를 SPICE 형태로 변환"""
+        spice_lines = []
+        
+        # 헤더 정보 (참고 파일 형식 따라)
+        voltage_count = sum(1 for cls in self.node_classes.values() if cls == 'VoltageSource')
+        spice_lines.append("* Multi-Power Circuit Netlist")
+        spice_lines.append(f"* Generated with {voltage_count} power sources")
+        spice_lines.append("* ")
+        
+        # 노드 매핑 생성 (Junction 노드를 실제 노드 번호로 변환)
+        node_mapping = self._create_node_mapping()
+        
+        # 컴포넌트 정의
+        component_counter = {}
+        
+        for node_name, node_class in self.node_classes.items():
+            if node_class in ['Junction', 'V-']:
+                continue  # Junction과 V-는 SPICE에서 제외
+                
+            # 컴포넌트 번호 생성
+            if node_class not in component_counter:
+                component_counter[node_class] = 1
+            else:
+                component_counter[node_class] += 1
+                
+            comp_id = component_counter[node_class]
+            value = self.node_values.get(node_name, 0.0)
+            
+            # 연결된 노드들 찾기
+            connected_nodes = self._get_connected_nodes(node_name, node_mapping)
+            
+            # SPICE 라인 생성
+            if node_class == 'VoltageSource':
+                if len(connected_nodes) >= 2:
+                    spice_lines.append(f"V{comp_id} {connected_nodes[0]} {connected_nodes[1]} {value}")
+                else:
+                    spice_lines.append(f"V{comp_id} {connected_nodes[0] if connected_nodes else node_mapping[node_name]} 0 {value}")
+                    
+            elif node_class == 'Resistor':
+                if len(connected_nodes) >= 2:
+                    spice_lines.append(f"R{comp_id} {connected_nodes[0]} {connected_nodes[1]} {value}")
+                else:
+                    spice_lines.append(f"R{comp_id} {connected_nodes[0] if connected_nodes else node_mapping[node_name]} 0 {value}")
+                    
+            elif node_class == 'Capacitor':
+                if len(connected_nodes) >= 2:
+                    spice_lines.append(f"C{comp_id} {connected_nodes[0]} {connected_nodes[1]} {value}u")
+                else:
+                    spice_lines.append(f"C{comp_id} {connected_nodes[0] if connected_nodes else node_mapping[node_name]} 0 {value}u")
+                    
+            elif node_class == 'Diode':
+                if len(connected_nodes) >= 2:
+                    spice_lines.append(f"D{comp_id} {connected_nodes[0]} {connected_nodes[1]} DMOD")
+                else:
+                    spice_lines.append(f"D{comp_id} {connected_nodes[0] if connected_nodes else node_mapping[node_name]} 0 DMOD")
+                    
+            elif node_class == 'LED':
+                if len(connected_nodes) >= 2:
+                    spice_lines.append(f"D{comp_id} {connected_nodes[0]} {connected_nodes[1]} LEDMOD")
+                else:
+                    spice_lines.append(f"D{comp_id} {connected_nodes[0] if connected_nodes else node_mapping[node_name]} 0 LEDMOD")
+                    
+            elif node_class == 'IC':
+                model = self.node_models.get(node_name, 'ua741')
+                # IC의 경우 핀 연결 정보 포함
+                ic_connections = []
+                for u, v in self.graph.edges:
+                    if u == node_name:
+                        pin_info = self.edge_pins.get((u, v), ('', ''))
+                        if pin_info[0]:
+                            ic_connections.append(f"{node_mapping.get(v, v)}")
+                    elif v == node_name:
+                        pin_info = self.edge_pins.get((u, v), ('', ''))
+                        if pin_info[1]:
+                            ic_connections.append(f"{node_mapping.get(u, u)}")
+                
+                conn_str = " ".join(ic_connections) if ic_connections else f"{node_mapping[node_name]}"
+                spice_lines.append(f"X{comp_id} {conn_str} {model}")
+        
+        # 구분선
+        spice_lines.append("* ")
+        
+        # 모델 정의 (참고 파일 형식 따라)
+        spice_lines.append(".MODEL DMOD D")
+        spice_lines.append(".MODEL LEDMOD D(IS=1E-12 N=2)")
+        spice_lines.append(".END")
+        
+        return "\n".join(spice_lines)
+    
+    def _create_node_mapping(self):
+        """노드 이름을 숫자로 매핑"""
+        node_mapping = {}
+        node_counter = 1
+        
+        # V- 노드들은 0 (접지)으로 매핑
+        for node_name, node_class in self.node_classes.items():
+            if node_class == 'V-':
+                node_mapping[node_name] = 0
+        
+        # 나머지 노드들은 순차적으로 번호 할당
+        for node_name, node_class in self.node_classes.items():
+            if node_name not in node_mapping:
+                if node_class == 'Junction':
+                    # Junction 노드는 연결된 실제 노드 번호 사용
+                    node_mapping[node_name] = node_counter
+                    node_counter += 1
+                else:
+                    node_mapping[node_name] = node_counter
+                    node_counter += 1
+        
+        return node_mapping
+    
+    def _get_connected_nodes(self, node_name, node_mapping):
+        """노드에 연결된 다른 노드들의 매핑된 번호 반환"""
+        connected = []
+        
+        for u, v in self.graph.edges:
+            if u == node_name:
+                connected.append(node_mapping.get(v, v))
+            elif v == node_name:
+                connected.append(node_mapping.get(u, u))
+        
+        # 중복 제거 및 정렬
+        return sorted(list(set(connected)))
+
+    def _save_spice_netlist(self, filename):
+        """SPICE netlist를 파일로 저장"""
+        spice_content = self._generate_spice_netlist()
+        
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(spice_content)
+        
+        print(f"✅ SPICE netlist saved to: {filename}")
 
     def _on_mouse(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -224,6 +366,7 @@ class CircuitSaver:
             name, cls, val = info
             self.node_positions[name] = (x, y)
             self.node_classes[name] = cls
+            self.node_values[name] = val
             self.graph.add_node(name, type=cls, value=val)
             
             if cls == 'IC':
@@ -239,7 +382,8 @@ class CircuitSaver:
             # Junction 노드 배치 제안
             self._suggest_junction_placement()
 
-    def draw_and_save(self, graphml_path="drawn_circuit.graphml"):
+    def draw_and_save(self, base_filename="drawn_circuit"):
+        """회로를 그리고 GraphML과 SPICE netlist 형태로 저장"""
         cv2.namedWindow("Draw Circuit")
         cv2.setMouseCallback("Draw Circuit", self._on_mouse)
 
@@ -250,6 +394,7 @@ class CircuitSaver:
         print("▶ 휠클릭: 병렬 회로 자동 감지 및 Junction 배치")
         print("▶ 'q': 저장 및 종료")
         print("▶ 's': 병렬 회로 제안 확인")
+        print("▶ 'n': SPICE netlist 미리보기")
         print("=" * 60)
         
         while True:
@@ -261,16 +406,50 @@ class CircuitSaver:
                 break
             elif key == ord('s'):
                 self._suggest_junction_placement()
+            elif key == ord('n'):
+                # SPICE netlist 미리보기
+                spice_preview = self._generate_spice_netlist()
+                print("\n" + "="*50)
+                print("🔍 SPICE NETLIST PREVIEW:")
+                print("="*50)
+                print(spice_preview)
+                print("="*50)
 
         cv2.destroyAllWindows()
+        
+        # 파일 저장
+        graphml_path = f"{base_filename}.graphml"
+        spice_path = f"{base_filename}.spice"
         
         # GraphML 저장 시 엣지 핀 정보도 포함
         for (u, v), (p1, p2) in self.edge_pins.items():
             self.graph[u][v]['source_pin'] = str(p1)  
             self.graph[u][v]['target_pin'] = str(p2)
             
+        # GraphML 저장
         write_graphml(self.graph, graphml_path)
         print(f"✅ GraphML saved to: {graphml_path}")
+        
+        # SPICE netlist 저장
+        self._save_spice_netlist(spice_path)
+        
+        # 요약 정보 출력
+        print("\n" + "="*50)
+        print("📊 CIRCUIT SUMMARY:")
+        print("="*50)
+        print(f"Total nodes: {len(self.graph.nodes)}")
+        print(f"Total edges: {len(self.graph.edges)}")
+        print("Component count:")
+        for comp_class, count in self._count_components().items():
+            print(f"  - {comp_class}: {count}")
+        print("="*50)
+
+    def _count_components(self):
+        """컴포넌트 개수 계산"""
+        count = {}
+        for node_class in self.node_classes.values():
+            count[node_class] = count.get(node_class, 0) + 1
+        return count
 
 # 노드 추가 없이 병렬 회로 처리하는 헬퍼 함수
 def detect_parallel_without_junctions(graph):
@@ -305,7 +484,7 @@ if __name__ == "__main__":
     # Junction 노드 포함 버전
     print("=== Junction 노드를 사용한 병렬 회로 그리기 ===")
     saver = CircuitSaver()
-    saver.draw_and_save("circuit9_rectification2.graphml")
+    saver.draw_and_save("circuit10_amplifier")
     
     # 병렬 회로 감지 (Junction 없이)
     print("\n=== Junction 없이 병렬 회로 감지 ===")
@@ -319,3 +498,5 @@ if __name__ == "__main__":
                 print(f"   경로 {j+1}: {' -> '.join(path)}")
     else:
         print("병렬 회로가 감지되지 않았습니다.")
+    
+    print("\n🎉 GraphML과 SPICE netlist 파일이 모두 생성되었습니다!")

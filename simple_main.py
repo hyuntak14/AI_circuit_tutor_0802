@@ -1,4 +1,4 @@
-# main.py (간소화된 버전) - 다중 전원 지원 수정된 버전
+# main.py (간소화된 버전) - 다중 전원 지원 + LLM 피드백 추가
 import os
 import matplotlib
 matplotlib.use('Qt5Agg')
@@ -12,6 +12,7 @@ from detector.hole_detector import HoleDetector
 from detector.resistor_detector import ResistorEndpointDetector
 from detector.led_detector import LedEndpointDetector
 from detector.wire_detector import WireDetector
+from detector.cap_detector import CapEndpointDetector
 from detector.diode_detector import ResistorEndpointDetector as DiodeEndpointDetector
 from detector.ic_chip_detector import ICChipPinDetector
 from ui.perspective_editor import select_and_transform
@@ -20,6 +21,7 @@ from ui.perspective_editor import select_and_transform
 from ComponentEditor import ComponentEditor
 from pin_manager import PinManager
 from circuit_generator_manager import CircuitGeneratorManager
+from llm_feedback_manager import LLMFeedbackManager  # 새로 추가
 
 class SimpleCircuitConverter:
     def __init__(self):
@@ -27,7 +29,7 @@ class SimpleCircuitConverter:
         self.display_size = (1200, 1200)
         
         # 기본 검출기들 초기화
-        self.detector = FasterRCNNDetector(r'D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/model/fasterrcnn.pt')
+        self.detector = FasterRCNNDetector(r'D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/model/fasterrcnn_v2.pt')
         self.hole_det = HoleDetector(
             template_csv_path='detector/template_holes_complete.csv',
             template_image_path='detector/breadboard18.jpg',
@@ -40,6 +42,7 @@ class SimpleCircuitConverter:
             'led': LedEndpointDetector(),
             'diode': DiodeEndpointDetector(),
             'ic': ICChipPinDetector(),
+            'capacitor': CapEndpointDetector(),
             'wire': WireDetector(kernel_size=4),
             'hole': self.hole_det
         }
@@ -59,6 +62,9 @@ class SimpleCircuitConverter:
         self.component_editor = ComponentEditor(self.class_colors)
         self.pin_manager = PinManager(self.class_colors, detectors)
         self.circuit_generator = CircuitGeneratorManager(self.hole_det)
+        
+        # LLM 피드백 매니저 초기화 (새로 추가)
+        self.llm_manager = None
 
     def _resize_for_display(self, image):
         """이미지를 1200x1200 크기로 리사이즈"""
@@ -105,10 +111,66 @@ class SimpleCircuitConverter:
         warped, _ = select_and_transform(img.copy(), bb)
         return warped, bb  # 원본 bounding box도 반환
 
+    def _initialize_llm_manager(self):
+        """LLM 매니저 초기화 (지연 로딩)"""
+        if self.llm_manager is None:
+            try:
+                self.llm_manager = LLMFeedbackManager()
+                return True
+            except Exception as e:
+                print(f"⚠️  LLM 시스템 초기화 실패: {e}")
+                print("   회로 변환은 계속 진행되지만 AI 피드백은 제공되지 않습니다.")
+                return False
+        return True
+
+    def _provide_llm_feedback(self, component_pins):
+        """LLM 피드백 제공"""
+        if not self._initialize_llm_manager():
+            return
+        
+        spice_file = "circuit.spice"
+        if not os.path.exists(spice_file):
+            print("⚠️  SPICE 파일을 찾을 수 없어 AI 피드백을 제공할 수 없습니다.")
+            return
+        
+        print("\n" + "="*60)
+        print("🤖 AI 회로 분석 및 피드백")
+        print("="*60)
+        
+        # 초기 회로 분석 피드백
+        feedback_success = self.llm_manager.provide_initial_feedback(
+            spice_file, 
+            component_pins,
+            "제가 구성한 브레드보드 회로를 분석해주세요."
+        )
+        
+        if not feedback_success:
+            print("❌ AI 피드백 제공에 실패했습니다.")
+            return
+        
+        # 사용자가 추가 질문을 원하는지 확인
+        print("\n" + "-"*60)
+        while True:
+            try:
+                user_choice = input("\n💬 AI와 더 대화하시겠습니까? (y/n): ").strip().lower()
+                
+                if user_choice in ['y', 'yes', '예', 'ㅇ']:
+                    self.llm_manager.start_interactive_chat()
+                    break
+                elif user_choice in ['n', 'no', '아니오', 'ㄴ']:
+                    print("👍 AI 피드백을 완료합니다.")
+                    break
+                else:
+                    print("y 또는 n을 입력해주세요.")
+                    
+            except KeyboardInterrupt:
+                print("\n👍 AI 피드백을 완료합니다.")
+                break
+
     def run(self):
-        """전체 프로세스 실행 - 다중 전원 지원"""
+        """전체 프로세스 실행 - 다중 전원 지원 + LLM 피드백"""
         print("=" * 50)
-        print("🔌 간소화된 브레드보드 → 회로도 변환기 (다중 전원 지원)")
+        print("🔌 간소화된 브레드보드 → 회로도 변환기 (AI 피드백 포함)")
         print("=" * 50)
         
         # 1. 이미지 로드
@@ -174,10 +236,14 @@ class SimpleCircuitConverter:
             print("  - circuit.graphml (그래프 데이터)")
             
             print(f"\n✨ 총 {len(power_sources)}개의 전원을 가진 회로가 성공적으로 생성되었습니다!")
+            
+            # 9. LLM 피드백 제공 (새로 추가)
+            print("\n🤖 AI 회로 분석을 시작합니다...")
+            self._provide_llm_feedback(component_pins)
+            
         else:
             print("\n❌ 회로 생성에 실패했습니다.")
 
 if __name__ == "__main__":
     converter = SimpleCircuitConverter()
     converter.run()
-    
