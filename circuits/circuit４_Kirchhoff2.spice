@@ -1,0 +1,11 @@
+* Multi-Power Circuit Netlist
+* Generated with 1 power sources
+
+* 
+V1 1 2 6.0
+R1 2 3 1000
+R2 3 4 2000
+R3 4 1 3000
+* 
+.MODEL DMOD D
+.MODEL LEDMOD D(IS=1E-12 N=2)

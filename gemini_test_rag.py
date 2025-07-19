@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# rag_gemini_chat.py
+# rag_gemini_chat.py (회로 분석 강화 버전)
 
 import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -11,7 +11,7 @@ import google.generativeai as genai
 from sentence_transformers import SentenceTransformer
 
 class RAGSystem:
-    def __init__(self, index_path="faiss_index.index", metadata_path="embedding_metadata.parquet"):
+    def __init__(self, index_path=r"D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/faiss_index.index", metadata_path=r"D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/embedding_metadata.parquet"):
         """RAG 시스템을 초기화합니다."""
         self.index_path = index_path
         self.metadata_path = metadata_path
@@ -140,7 +140,7 @@ def initialize_gemini():
 
     generation_config = genai.GenerationConfig(
         temperature=0.4, # 온도값을 조금 더 낮춰서 안정적인 응답 유도 (기존 0.7에서 변경)
-        max_output_tokens=1500 # 출력 토큰 수 증가 (필요시 조절)
+        max_output_tokens=2000 # 출력 토큰 수 증가 (더 상세한 분석을 위해)
     )
 
     model_names = [
@@ -171,84 +171,124 @@ def initialize_gemini():
 
 def create_rag_prompt(user_query, context, is_first_turn, practice_circuit_topic=""):
     """
-    RAG용 프롬프트를 생성합니다.
+    RAG용 프롬프트를 생성합니다 (회로 분석 강화).
     Args:
         user_query (str): 사용자의 현재 질문.
-        context (str): 검색된 관련 문서 내용.
+        context (str): 검색된 관련 문서 내용 또는 회로 분석 결과.
         is_first_turn (bool): 현재 턴이 첫 번째 턴인지 여부.
-        practice_circuit_topic (str): 실습 회로의 주제 (첫 턴에만 해당).
+        practice_circuit_topic (str): 실습 회로의 주제.
     """
+    
+    # 컨텍스트에서 회로 분석 결과 여부 확인
+    has_circuit_analysis = any(keyword in context for keyword in [
+        "=== 회로 분석 결과 ===", "유사도 점수", "감지된 오류", "성능 평가", "SPICE 넷리스트"
+    ])
+    
     if is_first_turn:
-        # 첫 번째 턴: 넷리스트 분석 및 실습 주제 일치 여부 확인에 집중
-        if context.strip():
+        # 첫 번째 턴: 회로 분석에 특화된 프롬프트
+        if has_circuit_analysis:
             prompt = f"""당신은 전자 회로 설계 및 분석을 돕는 전문 AI 어시스턴트입니다.
-사용자가 제공한 넷리스트와 실습 보고서 관련 참고 자료를 기반으로 질문에 답변해야 합니다.
-특히, 주어진 넷리스트에 잠재적인 오류가 있는지, 그리고 실습 주제인 '{practice_circuit_topic}' 회로와 일치하는지 면밀히 분석해주세요.
-**분석 결과 오류나 불일치(차이점)가 발견되면, 다음 형식에 따라 구체적이고 기술적인 용어를 사용하여 설명해주세요.**
-답변은 항상 객관적이고 사실에 기반하며, 어떤 종류의 유해하거나 부적절한 내용은 포함하지 않습니다.
+사용자가 제공한 브레드보드 회로의 SPICE 넷리스트, 컴포넌트 정보, 그리고 자동 분석 결과를 종합적으로 검토하여 전문적인 회로 분석을 제공해야 합니다.
 
---- 참고 자료 (넷리스트 및 관련 회로 정보) ---
+**분석 중점 사항:**
+1. **회로 구조 검증**: SPICE 넷리스트와 컴포넌트 배치의 정확성
+2. **오류 진단**: 감지된 오류들의 원인과 해결 방안
+3. **기준 회로 비교**: '{practice_circuit_topic}' 회로와의 차이점 분석
+4. **성능 평가**: 회로의 예상 동작과 특성
+5. **개선 제안**: 구체적이고 실행 가능한 수정 방안
+
+**답변 형식:**
+1. **🔍 회로 구조 분석**
+   - 주요 구성 요소와 연결 관계
+   - 전류 흐름 경로 분석
+
+2. **⚠️ 오류 및 문제점**
+   - 감지된 오류의 기술적 원인
+   - 각 오류가 회로에 미치는 영향
+
+3. **📊 기준 회로 비교**
+   - '{practice_circuit_topic}'와의 유사도 해석
+   - 주요 차이점과 그 의미
+
+4. **🛠️ 개선 방안**
+   - 우선순위별 수정 사항
+   - 단계별 개선 가이드
+
+5. **🎯 종합 평가**
+   - 회로의 전반적 완성도
+   - 학습 목표 달성도
+
+답변은 항상 기술적으로 정확하고 교육적이며, 어떤 종류의 유해하거나 부적절한 내용은 포함하지 않습니다.
+
+--- 회로 데이터 및 분석 결과 ---
 {context}
 
 --- 사용자의 질문 ---
 {user_query}
 
---- 답변 형식 (첫 번째 답변) ---
-1.  **개요:** 넷리스트 분석 및 실습 회로 일치 여부에 대한 핵심 요약. (예: "넷리스트는 정상적이며 실습 회로와 일치합니다." 또는 "넷리스트에 오류가 발견되었으며 실습 회로와 일부 다릅니다.")
-2.  **분석 결과:**
-    * **넷리스트 오류 여부:** 넷리스트에서 발견된 구체적인 문법적/논리적 오류 (예: "Component X의 연결이 잘못됨", "Net Y의 정의 누락" 등). 오류가 없다면 "넷리스트에서 특정 오류는 발견되지 않았습니다."로 기재.
-    * **실습 회로 일치 여부:** '{practice_circuit_topic}' 회로의 예상되는 구조/특성과 비교하여, 넷리스트가 어떤 부분이 일치하고 어떤 부분이 다른지 명확하게 설명. (예: "저항 R1의 값이 실습 가이드와 다릅니다.", "Op-Amp의 피드백 루프 구성이 변경되었습니다." 등). 완전히 일치한다면 "넷리스트는 실습 주제인 '{practice_circuit_topic}' 회로와 완전히 일치합니다."로 기재.
-3.  **다음 단계 제안:** 사용자가 넷리스트를 수정하거나, 회로를 개선하거나, 추가 분석을 진행할 수 있도록 도움이 될 만한 구체적인 조치 또는 권장 사항.
-
---- 답변 ---
+--- 전문적인 회로 분석 ---
 """
         else:
-            prompt = f"""당신은 전자 회로 설계 및 분석 전문 AI 어시스턴트입니다.
-사용자님, 현재 넷리스트 정보가 충분히 제공되지 않아 요청하신 분석을 진행하기 어렵습니다.
+            # 분석 결과가 없는 경우
+            prompt = f"""당신은 전자 회로 설계 및 분석을 돕는 전문 AI 어시스턴트입니다.
+사용자가 제공한 회로 정보를 바탕으로 기본적인 분석을 제공해주세요.
+
+실습 주제: '{practice_circuit_topic}'
+
+--- 제공된 회로 정보 ---
+{context}
 
 --- 사용자의 질문 ---
 {user_query}
 
---- 답변 ---
-넷리스트 또는 관련 실습 자료가 부족하여 요청하신 분석을 수행할 수 없습니다. 넷리스트 내용을 제공해주시거나, 어떤 종류의 정보를 분석하고 싶으신지 더 자세히 알려주시면 도움을 드릴 수 있습니다.
-답변은 항상 객관적이고 사실에 기반하며, 어떤 종류의 유해하거나 부적절한 내용은 포함하지 않습니다.
+--- 기본 회로 분석 ---
+제공된 정보를 바탕으로 회로의 구조와 특성을 분석해주시고, '{practice_circuit_topic}' 실습의 학습 목표와 관련된 조언을 제공해주세요.
+답변은 항상 기술적으로 정확하고 교육적이며, 어떤 종류의 유해하거나 부적절한 내용은 포함하지 않습니다.
 """
     else:
         # 이후 턴: 일반적인 Q&A (RAG 활용)
         if context.strip():
             prompt = f"""당신은 전자 회로 설계 및 분석을 돕는 전문 AI 어시스턴트입니다.
-제공된 참고 문서를 바탕으로 사용자의 질문에 정확하고 상세하게 답변해주세요.
-**답변은 항상 기술적이고 객관적인 사실에 기반하며, 어떤 종류의 유해하거나 부적절한 내용을 포함하지 않습니다.**
-만약 참고 문서에 질문에 대한 직접적인 정보가 없다면, 일반적인 전자 회로 지식을 활용하여 답변을 구성해주세요.
+제공된 참고 문서와 이전 분석 결과를 바탕으로 사용자의 질문에 정확하고 상세하게 답변해주세요.
 
---- 참고 문서 ---
+**답변 지침:**
+- 기술적으로 정확하고 구체적인 설명 제공
+- 필요시 회로 이론과 실제 응용 사례 연결
+- 학습자의 이해도를 높이는 교육적 접근
+- 안전하고 적절한 내용만 포함
+
+현재 실습 주제: '{practice_circuit_topic}'
+
+--- 참고 문서 및 이전 분석 ---
 {context}
 
 --- 사용자의 질문 ---
 {user_query}
 
---- 답변 형식 (이후 답변) ---
-* **요약:** 질문에 대한 핵심 내용을 간략하게 요약합니다.
-* **상세 설명:** 질문에 대한 자세하고 포괄적인 설명입니다. 필요시 예시나 관련 개념을 포함합니다.
-* **결론 및 추가 정보:** 답변의 마무리 또는 추가적으로 도움이 될 만한 관련 정보나 제안입니다.
-
---- 답변 ---
+--- 전문가 답변 ---
 """
         else:
             prompt = f"""당신은 전자 회로 설계 및 분석을 돕는 전문 AI 어시스턴트입니다.
 현재 질문과 관련된 참고 문서를 찾을 수 없습니다. 일반적인 전자 회로 지식에 기반하여 질문에 답변하겠습니다.
-**답변은 항상 기술적이고 객관적인 사실에 기반하며, 어떤 종류의 유해하거나 부적절한 내용을 포함하지 않습니다.**
+
+현재 실습 주제: '{practice_circuit_topic}'
+
+**답변 지침:**
+- 기술적으로 정확하고 신뢰할 수 있는 정보 제공
+- 실습 주제와 관련된 맥락에서 설명
+- 추가 학습을 위한 방향 제시
+- 안전하고 적절한 내용만 포함
 
 --- 사용자의 질문 ---
 {user_query}
 
---- 답변 ---
+--- 전문가 답변 ---
 """
 
     return prompt
 
 def chat_with_rag():
-    """RAG 시스템과 Gemini를 결합한 채팅 함수 (첫 응답/이후 응답 형식 분기 포함)"""
+    """RAG 시스템과 Gemini를 결합한 채팅 함수 (회로 분석 강화)"""
     # 1) RAG 시스템 초기화
     print("RAG 시스템 초기화 중...")
     try:
@@ -267,14 +307,13 @@ def chat_with_rag():
     
     # === 사용자 정의 설정 ===
     # 실습 회로의 주제를 여기에 명시적으로 정의합니다.
-    # 실제 사용 시에는 이 값을 동적으로 입력받거나 다른 시스템에서 가져와야 할 수 있습니다.
     practice_circuit_topic = "Op-Amp Inverting Amplifier (반전 증폭기)" 
     # ======================
 
     first_turn = True
     
     print("\n" + "="*60)
-    print("🤖 RAG + Gemini 채팅 시작! (종료: quit/exit/종료)")
+    print("🤖 RAG + Gemini 회로 분석 채팅 시작! (종료: quit/exit/종료)")
     print("============================================================")
     print(f"💡 현재 실습 주제: {practice_circuit_topic}")
     print("============================================================")
@@ -296,16 +335,15 @@ def chat_with_rag():
         # 4) 컨텍스트 생성
         context = rag_system.create_context(search_results)
         
-        # 5) RAG 프롬프트 생성 (modified call)
+        # 5) 강화된 RAG 프롬프트 생성
         rag_prompt = create_rag_prompt(user_input, context, first_turn, practice_circuit_topic)
 
         # 첫 턴 이후에는 first_turn을 False로 설정
         if first_turn:
             first_turn = False
 
-        
         # 6) Gemini로 답변 생성
-        print("🤖 Gemini: ", end="", flush=True)
+        print("🤖 AI 회로 전문가: ", end="", flush=True)
         try:
             response = model.generate_content(
                 rag_prompt,
@@ -328,9 +366,6 @@ def chat_with_rag():
         # 7) 참고 문서 정보 표시 (옵션)
         if search_results:
             print(f"\n📚 참고 문서: {len(search_results)}개 (최고 유사도 {search_results[0]['similarity_score']:.3f})")
-            # 디버깅을 위해 참고 문서의 content도 출력해볼 수 있습니다.
-            # for res in search_results:
-            #     print(f"  - Rank {res['rank']} (Score: {res['similarity_score']:.2f}): {res['content'][:100]}...")
 
 def main():
     # 필요한 라이브러리 확인

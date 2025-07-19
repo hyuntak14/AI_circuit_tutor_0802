@@ -1,15 +1,348 @@
-# circuit_generator_manager.py (다중 전원 지원 수정된 버전)
+# circuit_generator_manager.py (LLM 피드백 통합 버전)
 import cv2
 import tkinter as tk
 from tkinter import simpledialog, messagebox
 from circuit_generator import generate_circuit
 from checker.error_checker import ErrorChecker
-
+import os
+import glob
+import networkx as nx
+from checker.Circuit_comparer import CircuitComparer
+import unicodedata
+import re
 
 class CircuitGeneratorManager:
     def __init__(self, hole_detector):
         self.hole_det = hole_detector
+        self.reference_circuit_path = None  # 선택된 기준 회로 경로
+        self.reference_circuit_topic = "Unknown"  # 선택된 기준 회로 주제
+        
+        # 회로 주제 맵핑 (기존 topic_map 확장)
+        self.topic_map = {
+                    1: "병렬회로", 2: "직렬회로", 3: "키르히호프 1법칙", 4: "키르히호프 2법칙",
+                    5: "중첩의 원리-a",6: "중첩의 원리-b",7: "중첩의 원리-c",8: "교류 전원", 9: "오실로스코프1",
+                    10: "반파정류회로", 11: "반파정류회로2", 12: "비반전 증폭기"
+        }
+
+    def provide_comprehensive_feedback(self, errors: list, comparison_result: dict) -> str:
+        """종합적인 피드백 메시지 생성"""
+        feedback_lines = []
+        
+        # 🔍 1. 기준 회로 정보
+        if comparison_result:
+            feedback_lines.append(f"📊 기준 회로: {comparison_result.get('reference_topic', 'Unknown')}")
+        
+        # 🔍 2. 오류 분석 결과
+        if errors:
+            feedback_lines.append(f"\n❌ 회로 오류 ({len(errors)}개):")
+            for i, error in enumerate(errors[:5], 1):  # 최대 5개만 표시
+                feedback_lines.append(f"  {i}. {error}")
+            if len(errors) > 5:
+                feedback_lines.append(f"  ... 및 {len(errors) - 5}개 추가 오류")
+        else:
+            feedback_lines.append("\n✅ 회로 오류: 없음")
+        
+        # 🔍 3. 유사도 분석 결과
+        if comparison_result:
+            similarity = comparison_result.get('similarity', 0)
+            level = comparison_result.get('level', 'UNKNOWN')
+            
+            # 유사도 아이콘 및 메시지
+            if level == 'EXCELLENT':
+                icon = "🎉"
+                msg = "매우 높은 유사도 - 거의 동일한 회로입니다!"
+            elif level == 'GOOD':
+                icon = "✅"
+                msg = "높은 유사도 - 기준 회로와 유사합니다."
+            elif level == 'MODERATE':
+                icon = "⚠️"
+                msg = "중간 유사도 - 일부 차이가 있습니다."
+            else:
+                icon = "❌"
+                msg = "낮은 유사도 - 기준 회로와 많이 다릅니다."
+            
+            feedback_lines.append(f"\n📈 유사도: {similarity:.3f} ({similarity*100:.1f}%)")
+            feedback_lines.append(f"{icon} {msg}")
+        else:
+            feedback_lines.append("\n⚠️ 유사도 분석: 비교 실패")
+        
+        # 🔍 4. 개선 제안사항
+        feedback_lines.append("\n💡 개선 제안:")
+        
+        if errors:
+            feedback_lines.append("  🔧 오류 개선:")
+            for error in errors[:3]:  # 상위 3개 오류만
+                if "missing wire" in error.lower():
+                    feedback_lines.append("    - 누락된 연결선을 추가하세요.")
+                elif "voltage source" in error.lower():
+                    feedback_lines.append("    - 전압원 연결 방식을 확인하세요.")
+                elif "short circuit" in error.lower():
+                    feedback_lines.append("    - 단락 회로를 확인하세요.")
+                elif "open circuit" in error.lower():
+                    feedback_lines.append("    - 개방된 회로를 확인하세요.")
+                else:
+                    feedback_lines.append(f"    - {error[:50]}... 문제를 검토하세요.")
+        
+        if comparison_result:
+            similarity = comparison_result.get('similarity', 0)
+            if similarity < 0.5:
+                feedback_lines.append("  📐 회로 구조:")
+                feedback_lines.append("    - 기준 회로의 부품 배치를 참고하세요.")
+                feedback_lines.append("    - 연결 방식을 다시 확인하세요.")
+            elif similarity < 0.8:
+                feedback_lines.append("  🔍 세부 조정:")
+                feedback_lines.append("    - 주요 분기점(노드)을 재검토하세요.")
+                feedback_lines.append("    - 부품 값을 확인하세요.")
+            else:
+                feedback_lines.append("  👍 우수한 회로:")
+                feedback_lines.append("    - 기준 회로와 매우 유사합니다!")
+                feedback_lines.append("    - 세부 파라미터만 확인하세요.")
+        
+        return "\n".join(feedback_lines)
+
+    def create_detailed_feedback_data(self, errors: list, comparison_result: dict, component_count: int, power_count: int) -> dict:
+        """LLM에 전달할 상세한 피드백 데이터 생성"""
+        feedback_data = {
+            'reference_circuit': comparison_result.get('reference_topic', 'Unknown') if comparison_result else None,
+            'similarity_score': comparison_result.get('similarity', 0) if comparison_result else 0,
+            'similarity_level': comparison_result.get('level', 'UNKNOWN') if comparison_result else 'UNKNOWN',
+            'errors': errors,
+            'error_count': len(errors),
+            'component_count': component_count,
+            'power_source_count': power_count,
+            'analysis_summary': self.provide_comprehensive_feedback(errors, comparison_result)
+        }
+        
+        # 추가적인 분석 정보
+        if comparison_result:
+            if feedback_data['similarity_score'] >= 0.9:
+                feedback_data['performance_grade'] = 'A'
+                feedback_data['performance_description'] = '우수'
+            elif feedback_data['similarity_score'] >= 0.7:
+                feedback_data['performance_grade'] = 'B'
+                feedback_data['performance_description'] = '양호'
+            elif feedback_data['similarity_score'] >= 0.5:
+                feedback_data['performance_grade'] = 'C'
+                feedback_data['performance_description'] = '보통'
+            else:
+                feedback_data['performance_grade'] = 'D'
+                feedback_data['performance_description'] = '개선 필요'
+        else:
+            feedback_data['performance_grade'] = 'N/A'
+            feedback_data['performance_description'] = '비교 불가'
+        
+        return feedback_data
+
+    def show_comprehensive_feedback(self, errors: list, comparison_result: dict):
+        """종합 피드백을 콘솔과 messagebox로 표시"""
+        # 피드백 메시지 생성
+        feedback_message = self.provide_comprehensive_feedback(errors, comparison_result)
+        
+        # 🖥️ 콘솔에 출력
+        print("\n" + "="*80)
+        print("🔍 종합 회로 분석 결과")
+        print("="*80)
+        print(feedback_message)
+        print("="*80)
+        
+        # 📋 MessageBox에 표시
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            
+            # 창 제목 설정
+            if comparison_result:
+                similarity = comparison_result.get('similarity', 0)
+                level = comparison_result.get('level', 'UNKNOWN')
+                
+                if level == 'EXCELLENT':
+                    title = "🎉 회로 분석 결과 - 우수"
+                elif level == 'GOOD':
+                    title = "✅ 회로 분석 결과 - 양호"
+                elif level == 'MODERATE':
+                    title = "⚠️ 회로 분석 결과 - 보통"
+                else:
+                    title = "❌ 회로 분석 결과 - 개선 필요"
+            else:
+                title = "🔍 회로 분석 결과"
+            
+            # 메시지 표시 (긴 메시지는 스크롤 가능한 형태로)
+            if len(feedback_message) > 500:
+                # 긴 메시지의 경우 요약본 표시
+                summary_lines = []
+                lines = feedback_message.split('\n')
+                
+                for line in lines:
+                    if any(keyword in line for keyword in ['📊 기준 회로:', '✅ 회로 오류:', '❌ 회로 오류:', '📈 유사도:', '🎉', '✅', '⚠️', '❌']):
+                        summary_lines.append(line)
+                
+                summary_message = '\n'.join(summary_lines[:15])  # 최대 15줄
+                if len(lines) > 15:
+                    summary_message += "\n\n📝 상세한 분석 결과는 콘솔을 확인하세요."
+                    summary_message += "\n🤖 AI 분석이 곧 시작됩니다."
+                
+                messagebox.showinfo(title, summary_message)
+            else:
+                messagebox.showinfo(title, feedback_message + "\n\n🤖 AI 분석이 곧 시작됩니다.")
+            
+            root.destroy()
+            
+        except Exception as e:
+            print(f"⚠️ MessageBox 표시 실패: {e}")
+            print("콘솔에서 결과를 확인하세요.")
+
+    def select_reference_circuit(self, selection=None):
+        """사용자가 기준 회로를 선택하는 UI"""
+        print("\n🎯 기준 회로 선택")
+        print("="*50)
+        
+        # circuits 폴더 확인
+        circuits_dir = r"D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/circuits"
+        if not os.path.exists(circuits_dir):
+            print(f"❌ '{circuits_dir}' 폴더를 찾을 수 없습니다.")
+            return False
+        
+        # 사용 가능한 회로 파일 검색
+        available_circuits = []
+
+        # circuits_dir: 그래프ML 파일들이 있는 폴더 경로
+        for fname in os.listdir(circuits_dir):
+            # 전각 숫자 등을 아스키 숫자로 변환
+            normalized = unicodedata.normalize('NFKC', fname)
+            
+            for i in range(1, 13):
+                #  예) '4.graphml', 'circuit4.graphml', 'topic4.graphml', 'circuit_4.graphml'
+                #  그리고 뒤에 '_...' 접미사까지 허용
+                pattern = rf'^(?:{i}|circuit{i}|topic{i}|circuit_{i})(?:_.*)?\.graphml$'
+                
+                if re.match(pattern, normalized):
+                    path = os.path.join(circuits_dir, fname)
+                    topic = self.topic_map.get(i, f"회로 {i}")
+                    available_circuits.append((i, path, topic))
+                    break  # 이 파일은 i에 매칭되었으므로, 다음 파일로
+
+        if not available_circuits:
+            print("❌ circuits 폴더에서 기준 회로를 찾을 수 없습니다.")
+            return False
+        
+        # 사용자에게 선택 옵션 표시
+        print("📋 사용 가능한 기준 회로:")
+        for circuit_num, path, topic in available_circuits:
+            print(f"  {circuit_num}. {topic}")
+        
+        # 직접 선택이 주어진 경우
+        if selection is not None:
+            selected_circuit = next((item for item in available_circuits if item[0] == selection), None)
+            if selected_circuit:
+                self.reference_circuit_path = selected_circuit[1]
+                self.reference_circuit_topic = selected_circuit[2]
+                print(f"✅ 선택된 기준 회로: {selection}. {self.reference_circuit_topic}")
+                print(f"   파일 경로: {self.reference_circuit_path}")
+                return True
+            else:
+                print(f"❌ 선택된 회로 {selection}를 찾을 수 없습니다.")
+                return False
+        
+        # Tkinter로 사용자 선택 받기
+        root = tk.Tk()
+        root.withdraw()
+        
+        try:
+            choice = simpledialog.askinteger(
+                "기준 회로 선택",
+                f"기준 회로를 선택하세요 (1-12):\n\n" + 
+                "\n".join([f"{num}. {topic}" for num, _, topic in available_circuits]),
+                minvalue=1,
+                maxvalue=12
+            )
+            root.destroy()
+            
+            if choice is None:
+                print("❌ 기준 회로 선택이 취소되었습니다.")
+                return False
+            
+            # 선택된 회로 정보 저장
+            selected_circuit = next((item for item in available_circuits if item[0] == choice), None)
+            if selected_circuit:
+                self.reference_circuit_path = selected_circuit[1]
+                self.reference_circuit_topic = selected_circuit[2]
+                print(f"✅ 선택된 기준 회로: {choice}. {self.reference_circuit_topic}")
+                print(f"   파일 경로: {self.reference_circuit_path}")
+                return True
+            else:
+                print(f"❌ 선택된 회로 {choice}를 찾을 수 없습니다.")
+                return False
+                
+        except Exception as e:
+            print(f"❌ 회로 선택 중 오류 발생: {e}")
+            root.destroy()
+            return False
     
+    def compare_with_reference_circuit(self, generated_circuit_path):
+        """생성된 회로와 기준 회로를 비교"""
+        if not self.reference_circuit_path:
+            print("❌ 기준 회로가 선택되지 않았습니다.")
+            return None
+        
+        if not os.path.exists(generated_circuit_path):
+            print(f"❌ 생성된 회로 파일을 찾을 수 없습니다: {generated_circuit_path}")
+            return None
+        
+        print(f"\n🔍 회로 유사도 분석")
+        print("="*50)
+        print(f"기준 회로: {self.reference_circuit_topic}")
+        print(f"생성된 회로: {generated_circuit_path}")
+        
+        try:
+            # 그래프 로드
+            reference_graph = nx.read_graphml(self.reference_circuit_path)
+            generated_graph = nx.read_graphml(generated_circuit_path)
+            
+            # 회로 비교
+            comparer = CircuitComparer(generated_graph, reference_graph, debug=True)
+            similarity = comparer.compute_similarity()
+            
+            # 결과 출력
+            print(f"\n📊 유사도 분석 결과:")
+            print(f"  전체 유사도: {similarity:.3f} ({similarity*100:.1f}%)")
+            
+            # 유사도 해석
+            if similarity >= 0.9:
+                result_msg = "🎉 매우 높은 유사도 - 거의 동일한 회로입니다!"
+                result_level = "EXCELLENT"
+            elif similarity >= 0.7:
+                result_msg = "✅ 높은 유사도 - 기준 회로와 유사합니다."
+                result_level = "GOOD"
+            elif similarity >= 0.5:
+                result_msg = "⚠️ 중간 유사도 - 일부 차이가 있습니다."
+                result_level = "MODERATE"
+            else:
+                result_msg = "❌ 낮은 유사도 - 기준 회로와 많이 다릅니다."
+                result_level = "LOW"
+            
+            print(f"  평가: {result_msg}")
+            
+            # 시각화 비교 (선택사항)
+            try:
+                comparison_img_path = generated_circuit_path.replace('.graphml', '_comparison.png')
+                comparer.visualize_comparison(save_path=comparison_img_path, show=False)
+                print(f"  비교 시각화 저장: {comparison_img_path}")
+            except Exception as e:
+                print(f"  ⚠️ 시각화 저장 실패: {e}")
+            
+            return {
+                'similarity': similarity,
+                'level': result_level,
+                'message': result_msg,
+                'reference_topic': self.reference_circuit_topic
+            }
+            
+        except Exception as e:
+            print(f"❌ 회로 비교 중 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def quick_value_input(self, warped, component_pins):
         """개별 저항 및 캐패시터값 입력 (이미지에 번호 표시)"""
         # 1) 이미지 복사본 생성
@@ -86,7 +419,6 @@ class CircuitGeneratorManager:
 
         root.destroy()
         print("✅ 모든 저항/캐패시터 값 입력 완료")
-
 
     def quick_power_selection(self, warped, component_pins):
         """다중 전원 선택 - 여러 개의 전원을 입력받을 수 있도록 수정"""
@@ -216,13 +548,8 @@ class CircuitGeneratorManager:
         else:
             return None
 
-
-    # circuit_generator_manager.py 간단한 수정 - 하나의 회로도에 다중 전원 표시
-
-# circuit_generator_manager.py 핵심 수정 - 넷 병합 완전 해결
-
     def generate_final_circuit(self, component_pins, holes, power_sources, warped):
-        """최종 회로 생성 - 넷 병합 완전 처리"""
+        """최종 회로 생성 - 넷 병합 완전 처리 + 회로 비교 + LLM용 피드백 데이터 생성"""
         print("🔄 회로도 생성 중 (넷 병합 디버깅)...")
         
         try:
@@ -365,33 +692,57 @@ class CircuitGeneratorManager:
             
             # 9️⃣ 오류 검사
             print("🔍 회로 오류 검사 중...")
-            error_result = self._check_circuit_errors_lenient(
+            error_result, detected_errors = self._check_circuit_errors_lenient_with_details(
                 components, power_pairs, power_sources
             )
             
             if not error_result:
                 print("❌ 사용자가 회로도 생성을 취소했습니다.")
-                return False
+                return False, None  # 피드백 데이터도 None 반환
+            
+            # 🔟 기준 회로와 비교
+            comparison_result = None
+            if self.reference_circuit_path:
+                print("\n🔍 기준 회로와 유사도 비교 중...")
+                generated_graphml = "circuit.graphml"
+                comparison_result = self.compare_with_reference_circuit(generated_graphml)
+                
+                if comparison_result:
+                    print(f"✅ 회로 비교 완료: {comparison_result['level']} ({comparison_result['similarity']:.3f})")
+                else:
+                    print("⚠️ 회로 비교 실패")
+            
+            # 1️⃣1️⃣ 종합 피드백 표시
+            print("\n🎯 종합 피드백 생성 중...")
+            self.show_comprehensive_feedback(detected_errors, comparison_result)
+            
+            # 1️⃣2️⃣ LLM용 상세 피드백 데이터 생성 ⭐
+            component_count = len([c for c in component_pins if c['class'] != 'Line_area'])
+            power_count = len(power_sources)
+            
+            feedback_data = self.create_detailed_feedback_data(
+                detected_errors, comparison_result, component_count, power_count
+            )
             
             print("✅ 넷 병합이 완전히 적용된 회로도 생성 완료!")
             print("📁 생성된 파일:")
             print("  - circuit.jpg (병합 적용 회로도)")
             print("  - circuit.spice (병합 적용 SPICE 넷리스트)")
-            print("  - circuit_connected.jpg (연결선 포함)")
-            print("  - circuit_traditional.jpg (전통적 스타일)")
+            print("  - circuit.graphml (회로 그래프)")
             
-            return True
+            return True, feedback_data  # 성공 여부와 피드백 데이터 반환
             
         except Exception as e:
             print(f"❌ 회로 생성 실패: {e}")
             import traceback
             traceback.print_exc()
-            return False
+            return False, None
 
-    def _check_circuit_errors_lenient(self, components, power_pairs, power_sources):
-        """관대한 오류 검사 - 다중 전원 허용"""
+    def _check_circuit_errors_lenient_with_details(self, components, power_pairs, power_sources):
+        """관대한 오류 검사 - 다중 전원 허용 + 오류 목록 반환"""
         try:
             components_for_check = components.copy()
+            detected_errors = []
             
             # 기존 전압원 확인
             existing_voltage_sources = [comp for comp in components_for_check if comp['class'] == 'VoltageSource']
@@ -439,6 +790,8 @@ class CircuitGeneratorManager:
                 else:
                     filtered_errors.append(error)
             
+            detected_errors = filtered_errors  # 필터링된 오류들을 저장
+            
             if filtered_errors:
                 print(f"⚠️ {len(filtered_errors)}개의 심각한 오류가 발견되었습니다:")
                 for i, error in enumerate(filtered_errors, 1):
@@ -460,127 +813,14 @@ class CircuitGeneratorManager:
                 result = messagebox.askyesno("회로 오류 발견", error_msg)
                 root.destroy()
                 
-                return result
+                return result, detected_errors
             else:
                 print("✅ 심각한 회로 오류가 발견되지 않았습니다!")
                 if len(power_sources) > 1:
                     print(f"📋 {len(power_sources)}개의 전원이 하나의 회로에 표시됩니다.")
-                return True
+                return True, detected_errors
                 
         except Exception as e:
             print(f"⚠️ 오류 검사 중 문제가 발생했습니다: {e}")
             print("회로도 생성을 계속합니다...")
-            return True
-
-    def _check_circuit_errors_multi_power(self, components, power_pairs, power_sources):
-        """다중 전원을 고려한 오류 검사"""
-        try:
-            # 🔧 중복 방지: components 복사본으로 작업
-            components_for_check = components.copy()
-            
-            # 1. 기존 전압원 확인
-            existing_voltage_sources = [comp for comp in components_for_check if comp['class'] == 'VoltageSource']
-            print(f"🔍 기존 전압원: {len(existing_voltage_sources)}개")
-            
-            # 2. nets_mapping 생성
-            nets_mapping = {}
-            for comp in components_for_check:
-                n1, n2 = comp['nodes']
-                nets_mapping.setdefault(n1, []).append(comp['name'])
-                nets_mapping.setdefault(n2, []).append(comp['name'])
-            
-            # 🔧 3. 전압원이 부족한 경우에만 추가 (다중 전원 대응)
-            expected_voltage_sources = len(power_sources)
-            if len(existing_voltage_sources) < expected_voltage_sources:
-                print(f"⚠️ 전압원이 부족합니다. {expected_voltage_sources - len(existing_voltage_sources)}개 추가합니다.")
-                
-                # 부족한 만큼 전압원 추가
-                for i in range(len(existing_voltage_sources), expected_voltage_sources):
-                    voltage, _, _ = power_sources[i]
-                    net_p, _, net_m, _ = power_pairs[i]
-                    
-                    vs_name = f"V{i+1}"
-                    vs_comp = {
-                        'name': vs_name,
-                        'class': 'VoltageSource',
-                        'value': voltage,
-                        'nodes': (net_p, net_m)
-                    }
-                    components_for_check.append(vs_comp)
-                    nets_mapping.setdefault(net_p, []).append(vs_name)
-                    nets_mapping.setdefault(net_m, []).append(vs_name)
-            else:
-                print("✅ 전압원이 충분히 존재합니다.")
-            
-            # 4. ground_net 설정 (첫 번째 전원의 minus 단자)
-            ground_net = power_pairs[0][2] if power_pairs else 0
-            
-            print(f"🔍 ErrorChecker 데이터:")
-            print(f"  - 컴포넌트 수: {len(components_for_check)}")
-            print(f"  - 전압원 수: {len([c for c in components_for_check if c['class'] == 'VoltageSource'])}")
-            print(f"  - 넷 수: {len(nets_mapping)}")
-            print(f"  - Ground 넷: {ground_net}")
-            
-            # 🔧 중복 컴포넌트 확인 및 제거
-            comp_names = [comp['name'] for comp in components_for_check]
-            duplicates = [name for name in set(comp_names) if comp_names.count(name) > 1]
-            if duplicates:
-                print(f"⚠️ 중복된 컴포넌트 이름: {duplicates}")
-                seen_names = set()
-                unique_components = []
-                for comp in components_for_check:
-                    if comp['name'] not in seen_names:
-                        unique_components.append(comp)
-                        seen_names.add(comp['name'])
-                    else:
-                        print(f"  - 중복 제거: {comp['name']} ({comp['class']})")
-                components_for_check = unique_components
-                
-                # nets_mapping 재생성
-                nets_mapping = {}
-                for comp in components_for_check:
-                    n1, n2 = comp['nodes']
-                    nets_mapping.setdefault(n1, []).append(comp['name'])
-                    nets_mapping.setdefault(n2, []).append(comp['name'])
-            
-            # 5. ErrorChecker 실행
-            checker = ErrorChecker(components_for_check, nets_mapping, ground_nodes={ground_net})
-            errors = checker.run_all_checks()
-            
-            # 6. 결과 처리
-            if errors:
-                print(f"⚠️ {len(errors)}개의 회로 오류가 발견되었습니다:")
-                for i, error in enumerate(errors, 1):
-                    print(f"  {i}. {error}")
-                
-                # 사용자에게 오류 알림 및 선택권 제공
-                root = tk.Tk()
-                root.withdraw()
-                
-                error_msg = f"다음 {len(errors)}개의 회로 오류가 발견되었습니다:\n\n"
-                for i, error in enumerate(errors[:5], 1):
-                    error_msg += f"{i}. {error}\n"
-                
-                if len(errors) > 5:
-                    error_msg += f"\n... 및 {len(errors) - 5}개 추가 오류\n"
-                
-                error_msg += "\n그래도 회로도를 생성하시겠습니까?"
-                
-                result = messagebox.askyesno("회로 오류 발견", error_msg)
-                root.destroy()
-                
-                if not result:
-                    return False
-                else:
-                    print("⚠️ 사용자가 오류를 무시하고 회로도 생성을 계속하기로 했습니다.")
-                    return True
-            else:
-                print("✅ 회로 오류가 발견되지 않았습니다!")
-                return True
-                
-        except Exception as e:
-            print(f"⚠️ 오류 검사 중 문제가 발생했습니다: {e}")
-            import traceback
-            traceback.print_exc()
-            print("회로도 생성을 계속합니다...")
-            return True
+            return True, []
