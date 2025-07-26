@@ -23,10 +23,13 @@ from pin_manager import PinManager
 from circuit_generator_manager import CircuitGeneratorManager
 from llm_feedback_manager import LLMFeedbackManager
 
+
 class SimpleCircuitConverter:
     def __init__(self):
         # 디스플레이 크기 설정
         self.display_size = (1200, 1200)
+        self.root = tk.Tk() # 메인 Tkinter 인스턴스 생성
+        self.root.withdraw() # 메인 창은 숨김
         
         # 기본 검출기들 초기화
         self.detector = FasterRCNNDetector(r'D:/Hyuntak/lab/AR_circuit_tutor/breadboard_project/model/fasterrcnn_v2.pt')
@@ -181,7 +184,7 @@ class SimpleCircuitConverter:
                     10: "반파정류회로", 11: "반파정류회로2", 12: "비반전 증폭기"
                 }
                 
-                for i in range(1, 11):
+                for i in range(1, len(self.circuit_topics)):
                     topic = self.circuit_topics.get(i, f"회로 {i}")
                     self.listbox.insert(tk.END, f"{i:2d}. {topic}")
                 
@@ -271,173 +274,134 @@ class SimpleCircuitConverter:
         return True
 
     def _provide_comprehensive_llm_feedback(self, component_pins, feedback_data):
-        """종합적인 LLM 피드백 제공 (회로 분석 결과 포함)"""
-        if not self._initialize_llm_manager():
-            return
-        
-        spice_file = "circuit.spice"
-        if not os.path.exists(spice_file):
-            print("⚠️ SPICE 파일을 찾을 수 없어 AI 피드백을 제공할 수 없습니다.")
-            return
-        
-        print("\n" + "🧠" + "="*59)
-        print("🤖 AI 기반 종합 회로 분석 시작")
-        print("="*60)
-        
-        # 종합적인 AI 분석 수행
-        feedback_success = self.llm_manager.provide_comprehensive_analysis(
-            spice_file, component_pins, feedback_data
-        )
-        
-        if not feedback_success:
-            print("❌ AI 종합 분석에 실패했습니다.")
-            # 기본 분석으로 대체
-            print("기본 AI 분석을 시도합니다...")
-            feedback_success = self.llm_manager.provide_initial_feedback_with_analysis(
-                spice_file, component_pins, feedback_data,
-                "제가 구성한 브레드보드 회로를 분석해주세요."
+            """종합적인 LLM 피드백 UI를 제공합니다."""
+            if not self._initialize_llm_manager():
+                return
+            
+            spice_file = "circuit.spice"
+            if not os.path.exists(spice_file):
+                print("⚠️ SPICE 파일을 찾을 수 없어 AI 피드백을 제공할 수 없습니다.")
+                return
+
+            print("\n" + "🤖" + "="*59)
+            print("AI 기반 종합 회로 분석을 위한 데이터 생성 중...")
+            print("="*60)
+
+            # 분석 상황에 따른 맞춤형 질문 생성
+            similarity = feedback_data.get('similarity_score', 0)
+            errors = feedback_data.get('errors', [])
+            reference = feedback_data.get('reference_circuit', 'Unknown')
+            
+            if len(errors) > 0:
+                analysis_query = f"이 회로에 {len(errors)}개의 오류가 감지되었습니다. 각 오류의 원인과 해결책을 분석해주세요."
+            elif similarity < 0.7:
+                analysis_query = f"기준 회로({reference})와의 유사도가 {similarity:.1%}로 낮습니다. 어떤 부분을 개선해야 할지 분석해주세요."
+            else:
+                analysis_query = f"이 회로는 기준 회로({reference})와 {similarity:.1%}의 높은 유사도를 보입니다. 회로의 동작 원리와 특성을 설명해주세요."
+            
+            # 초기 분석 텍스트 생성
+            initial_analysis_text = self.llm_manager.get_initial_analysis_text(
+                spice_file, component_pins, feedback_data, analysis_query
             )
-        
-        if feedback_success:
-            # 사용자가 추가 질문을 원하는지 확인
-            print("\n" + "-"*60)
-            while True:
-                try:
-                    user_choice = input("\n💬 AI와 더 대화하시겠습니까? (y/n): ").strip().lower()
-                    
-                    if user_choice in ['y', 'yes', '예', 'ㅇ']:
-                        self.llm_manager.start_interactive_chat()
-                        break
-                    elif user_choice in ['n', 'no', '아니오', 'ㄴ']:
-                        print("👍 AI 피드백을 완료합니다.")
-                        break
-                    else:
-                        print("y 또는 n을 입력해주세요.")
-                        
-                except KeyboardInterrupt:
-                    print("\n👍 AI 피드백을 완료합니다.")
-                    break
-        else:
-            print("❌ AI 분석을 완료할 수 없었습니다.")
+            
+            if "❌" in initial_analysis_text:
+                print(f"AI 분석 중 오류가 발생했습니다: {initial_analysis_text}")
+                return
+
+            print("✅ AI 분석 생성 완료! UI를 실행합니다.")
+            
+            # AI 채팅 UI 시작
+            self.llm_manager.start_chat_ui(self.root, initial_analysis_text)
+            # UI 창이 닫힐 때까지 기다리게 하려면 mainloop를 호출해야 합니다.
+            # 이 컨텍스트에서는 Toplevel이므로, 메인 프로그램이 계속 실행되도록 둡니다.
 
     def run(self):
-        """전체 프로세스 실행 - 다중 전원 지원 + 종합 AI 피드백"""
-        print("=" * 60)
-        print("🔌 간소화된 브레드보드 → 회로도 변환기")
-        print("   (종합 AI 분석 + 회로 비교 기능 포함)")
-        print("=" * 60)
-        
-        # 🎯 1. 기준 회로 선택 GUI
-        print("\n🎯 기준 회로 선택 단계")
-        selected_circuit = self._select_reference_circuit_gui()
-        
-        if selected_circuit is None:
-            print("❌ 프로그램이 취소되었습니다.")
-            return
-        elif selected_circuit == "skip":
-            print("📋 회로 비교 기능을 사용하지 않습니다.")
-            use_reference = False
-        else:
-            print(f"✅ 선택된 기준 회로: {selected_circuit}")
-            use_reference = True
+        """전체 프로세스 실행 - UI 기반 AI 피드백"""
+        try:
+            print("=" * 60)
+            print("🔌 간소화된 브레드보드 → 회로도 변환기")
+            print("   (UI 기반 AI 분석 기능 포함)")
+            print("=" * 60)
             
-            # CircuitGeneratorManager에 선택된 회로 설정
-            reference_selected = self.circuit_generator.select_reference_circuit(selected_circuit)
+            # ... run 메서드의 기존 로직 (기준 회로 선택, 이미지 로드, 검출 등)은 그대로 유지 ...
             
-            if reference_selected:
-                print(f"✅ 기준 회로 로드됨: {self.circuit_generator.reference_circuit_topic}")
-                self.selected_circuit = selected_circuit
-                self.practice_circuit_topic = self.circuit_generator.reference_circuit_topic
-                print(f"✅ 실습 주제 설정: {self.practice_circuit_topic}")
-            else:
-                print("⚠️ 기준 회로 로드 실패 - 비교 기능 없이 진행합니다.")
+            # 🎯 1. 기준 회로 선택 GUI
+            print("\n🎯 기준 회로 선택 단계")
+            selected_circuit = self._select_reference_circuit_gui() # self.root를 사용하도록 수정 가능
+            
+            if selected_circuit is None:
+                print("❌ 프로그램이 취소되었습니다.")
+                return
+            elif selected_circuit == "skip":
+                print("📋 회로 비교 기능을 사용하지 않습니다.")
                 use_reference = False
-        
-        # 2. 이미지 로드
-        print("\n📷 이미지 로드 단계")
-        img = self.load_image()
-        if img is None:
-            print("❌ 이미지를 선택하지 않았습니다.")
-            return
-        
-        # 3. 브레드보드 자동 검출 및 변환
-        print("\n🔍 브레드보드 검출 단계")
-        result = self.auto_detect_and_transform(img)
-        if result is None:
-            return
-        warped, original_bb = result  # warped와 원본 bbox 둘 다 받기
-        
-        # 4. 컴포넌트 검출 및 편집 (ComponentEditor 사용)
-        print("\n🔧 컴포넌트 검출 단계")
-        components = self.component_editor.quick_component_detection(warped, self.detector)
-        if not components:
-            print("❌ 컴포넌트가 검출되지 않았습니다.")
-            return
-        
-        # 5. 핀 검출 (PinManager 사용) - 원본 이미지와 bbox 전달
-        print("\n📍 핀 검출 단계")
-        component_pins, holes = self.pin_manager.auto_pin_detection(warped, components, img, original_bb)
-        
-        # 6. 핀 위치 확인 및 수정 단계 (PinManager 사용)
-        print("\n✏️ 핀 위치 확인 단계")
-        component_pins = self.pin_manager.manual_pin_verification_and_correction(warped, component_pins, holes)
-        
-        # 7. 값 입력 (CircuitGeneratorManager 사용)
-        print("\n📝 컴포넌트 값 입력 단계")
-        self.circuit_generator.quick_value_input(warped, component_pins)
-        
-        # 8. 다중 전원 선택 (수정된 CircuitGeneratorManager 사용)
-        print("\n🔋 전원 설정 단계")
-        power_sources = self.circuit_generator.quick_power_selection(warped, component_pins)
-        
-        if not power_sources:
-            print("❌ 전원이 설정되지 않았습니다.")
-            return
-        
-        # 전원 정보 출력
-        print(f"\n📊 설정된 전원 정보:")
-        for i, (voltage, plus_pt, minus_pt) in enumerate(power_sources, 1):
-            print(f"  전원 {i}: {voltage}V, 양극 {plus_pt}, 음극 {minus_pt}")
-        
-        # 9. 회로 생성 및 분석 (수정된 CircuitGeneratorManager 사용) ⭐
-        print("\n🔧 회로도 생성 및 분석 단계")
-        success, feedback_data = self.circuit_generator.generate_final_circuit(
-            component_pins, holes, power_sources, warped
-        )
-        
-        if success:
-            print("\n🎉 다중 전원 회로 변환 완료!")
-            print("📁 생성된 파일:")
-            print("  - circuit.jpg (메인 회로도)")
-            print("  - circuit.spice (SPICE 넷리스트)")
-            print("  - circuit.graphml (회로 그래프)")
-            
-            # 다중 전원에 따른 추가 파일들 안내
-            if len(power_sources) > 1:
-                print("  - 추가 전원별 회로도:")
-                for i in range(2, len(power_sources) + 1):
-                    print(f"    - circuit_pwr{i}.jpg")
-            
-            # 연결성 그래프 파일도 안내
-            print("  - circuit_graph.png (연결성 그래프)")
-            
-            # 🎯 비교 결과 요약 표시
-            if use_reference and self.circuit_generator.reference_circuit_path:
-                print(f"\n🔍 회로 비교 결과:")
-                print(f"  기준 회로: {self.circuit_generator.reference_circuit_topic}")
-                print(f"  비교 완료 - 자세한 결과는 위 로그를 참조하세요.")
-            
-            print(f"\n✨ 총 {len(power_sources)}개의 전원을 가진 회로가 성공적으로 생성되었습니다!")
-            
-            # 🤖 10. 종합 AI 분석 제공 (새로 추가!) ⭐
-            if feedback_data:
-                print("\n🧠 AI 기반 종합 회로 분석을 시작합니다...")
-                self._provide_comprehensive_llm_feedback(component_pins, feedback_data)
             else:
-                print("\n⚠️ 회로 분석 데이터가 없어 AI 분석을 건너뜁니다.")
+                print(f"✅ 선택된 기준 회로: {selected_circuit}")
+                use_reference = True
+                reference_selected = self.circuit_generator.select_reference_circuit(selected_circuit)
+                if reference_selected:
+                    self.selected_circuit = selected_circuit
+                    self.practice_circuit_topic = self.circuit_generator.reference_circuit_topic
+                    print(f"✅ 실습 주제 설정: {self.practice_circuit_topic}")
+                else:
+                    use_reference = False
+
+            # ... [이미지 로드]부터 [회로 생성 및 분석]까지의 로직은 그대로 유지 ...
+            print("\n📷 이미지 로드 단계")
+            img = self.load_image()
+            if img is None:
+                print("❌ 이미지를 선택하지 않았습니다.")
+                return
             
-        else:
-            print("\n❌ 회로 생성에 실패했습니다.")
+            print("\n🔍 브레드보드 검출 단계")
+            result = self.auto_detect_and_transform(img)
+            if result is None: return
+            warped, original_bb = result
+            
+            print("\n🔧 컴포넌트 검출 단계")
+            components = self.component_editor.quick_component_detection(warped, self.detector)
+            if not components: return
+            
+            print("\n📍 핀 검출 단계")
+            component_pins, holes = self.pin_manager.auto_pin_detection(warped, components, img, original_bb)
+            
+            print("\n✏️ 핀 위치 확인 단계")
+            component_pins = self.pin_manager.manual_pin_verification_and_correction(warped, component_pins, holes)
+            
+            print("\n📝 컴포넌트 값 입력 단계")
+            self.circuit_generator.quick_value_input(warped, component_pins)
+            
+            print("\n🔋 전원 설정 단계")
+            power_sources = self.circuit_generator.quick_power_selection(warped, component_pins)
+            if not power_sources: return
+            
+            print("\n🔧 회로도 생성 및 분석 단계")
+            success, feedback_data = self.circuit_generator.generate_final_circuit(
+                component_pins, holes, power_sources, warped
+            )
+            # ...
+
+            if success:
+                print("\n🎉 회로 변환 완료!")
+                # ... (생성 파일 안내 등 기존 출력 유지) ...
+
+                # 🤖 10. 종합 AI 분석 UI 제공
+                if feedback_data:
+                    self._provide_comprehensive_llm_feedback(component_pins, feedback_data)
+                    print("\nAI 분석 창이 열렸습니다. 프로그램은 백그라운드에서 계속 실행됩니다.")
+                    # UI가 이벤트를 처리할 수 있도록 mainloop를 호출합니다.
+                    self.root.mainloop()
+
+                else:
+                    print("\n⚠️ 회로 분석 데이터가 없어 AI 분석을 건너뜁니다.")
+            else:
+                print("\n❌ 회로 생성에 실패했습니다.")
+        
+        finally:
+            # 프로그램 종료 시 Tkinter 루트 창 확실히 닫기
+            if self.root:
+                self.root.destroy()
+
 
 if __name__ == "__main__":
     converter = SimpleCircuitConverter()

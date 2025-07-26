@@ -167,23 +167,23 @@ class CircuitGeneratorManager:
                 title = "🔍 회로 분석 결과"
             
             # 메시지 표시 (긴 메시지는 스크롤 가능한 형태로)
-            if len(feedback_message) > 500:
-                # 긴 메시지의 경우 요약본 표시
-                summary_lines = []
-                lines = feedback_message.split('\n')
+            # if len(feedback_message) > 500:
+            #     # 긴 메시지의 경우 요약본 표시
+            #     summary_lines = []
+            #     lines = feedback_message.split('\n')
                 
-                for line in lines:
-                    if any(keyword in line for keyword in ['📊 기준 회로:', '✅ 회로 오류:', '❌ 회로 오류:', '📈 유사도:', '🎉', '✅', '⚠️', '❌']):
-                        summary_lines.append(line)
+            #     for line in lines:
+            #         if any(keyword in line for keyword in ['📊 기준 회로:', '✅ 회로 오류:', '❌ 회로 오류:', '📈 유사도:', '🎉', '✅', '⚠️', '❌']):
+            #             summary_lines.append(line)
                 
-                summary_message = '\n'.join(summary_lines[:15])  # 최대 15줄
-                if len(lines) > 15:
-                    summary_message += "\n\n📝 상세한 분석 결과는 콘솔을 확인하세요."
-                    summary_message += "\n🤖 AI 분석이 곧 시작됩니다."
+            #     summary_message = '\n'.join(summary_lines[:15])  # 최대 15줄
+            #     if len(lines) > 15:
+            #         summary_message += "\n\n📝 상세한 분석 결과는 콘솔을 확인하세요."
+            #         summary_message += "\n🤖 AI 분석이 곧 시작됩니다."
                 
-                messagebox.showinfo(title, summary_message)
-            else:
-                messagebox.showinfo(title, feedback_message + "\n\n🤖 AI 분석이 곧 시작됩니다.")
+            #     messagebox.showinfo(title, summary_message)
+            # else:
+            #     messagebox.showinfo(title, feedback_message + "\n\n🤖 AI 분석이 곧 시작됩니다.")
             
             root.destroy()
             
@@ -810,10 +810,13 @@ class CircuitGeneratorManager:
                 
                 error_msg += "\n그래도 회로도를 생성하시겠습니까?"
                 
-                result = messagebox.askyesno("회로 오류 발견", error_msg)
-                root.destroy()
+                #result = messagebox.askyesno("회로 오류 발견", error_msg)
+                #root.destroy()
                 
-                return result, detected_errors
+                #return result, detected_errors
+                root.destroy()
+                # 강제 생성 진행 (True 반환)
+                return True, detected_errors
             else:
                 print("✅ 심각한 회로 오류가 발견되지 않았습니다!")
                 if len(power_sources) > 1:

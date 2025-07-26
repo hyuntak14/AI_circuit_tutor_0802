@@ -1,0 +1,166 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d3" for="edge" attr.name="target_pin" attr.type="string"/>
+<key id="d2" for="edge" attr.name="source_pin" attr.type="string"/>
+<key id="d1" for="node" attr.name="value" attr.type="double"/>
+<key id="d0" for="node" attr.name="type" attr.type="string"/>
+<graph edgedefault="directed"><node id="V1">
+  <data key="d0">VoltageSource</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="D2">
+  <data key="d0">Diode</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="D3">
+  <data key="d0">Diode</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="D4">
+  <data key="d0">Diode</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="D5">
+  <data key="d0">Diode</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="C6">
+  <data key="d0">Capacitor</data>
+  <data key="d1">100.0</data>
+</node>
+<node id="1.5">
+  <data key="d0">Resistor</data>
+  <data key="d1">1.5</data>
+</node>
+<node id="L8">
+  <data key="d0">LED</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="D9">
+  <data key="d0">Diode</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="L10">
+  <data key="d0">LED</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="R11">
+  <data key="d0">Resistor</data>
+  <data key="d1">1.5</data>
+</node>
+<node id="J12">
+  <data key="d0">Junction</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="J13">
+  <data key="d0">Junction</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="J14">
+  <data key="d0">Junction</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="J15">
+  <data key="d0">Junction</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="J16">
+  <data key="d0">Junction</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="J17">
+  <data key="d0">Junction</data>
+  <data key="d1">0.0</data>
+</node>
+<node id="J18">
+  <data key="d0">Junction</data>
+  <data key="d1">0.0</data>
+</node>
+<edge source="V1" target="J12">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="V1" target="J18">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="D3" target="J16">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="D4" target="J14">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="D5" target="J14">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="C6" target="1.5">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="C6" target="J17">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="1.5" target="L8">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="L8" target="J17">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="D9" target="L10">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="L10" target="R11">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="R11" target="J18">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="J12" target="D9">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="J13" target="J12">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="J13" target="D2">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="J13" target="D5">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="J14" target="C6">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="J15" target="D2">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="J15" target="D3">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="J16" target="D4">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="J17" target="J15">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+<edge source="J18" target="J16">
+  <data key="d2"></data>
+  <data key="d3"></data>
+</edge>
+</graph></graphml>

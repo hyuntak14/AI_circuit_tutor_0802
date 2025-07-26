@@ -4,10 +4,11 @@ import numpy as np
 from resistor_detector import ResistorEndpointDetector
 #from diode_detector import ResistorEndpointDetector
 from led_detector import LedEndpointDetector
+from Improved_resistor_det import ImprovedResistorEndpointDetector
 
 # 현재 경로에서 'resistor'가 포함된 파일명 찾기
 current_dir = os.getcwd()
-files = [f for f in os.listdir(current_dir) if "diode" in f.lower() and f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+files = [f for f in os.listdir(current_dir) if "resistor" in f.lower() and f.lower().endswith(('.jpg', '.png', '.jpeg'))]
 
 if not files:
     print("resistor가 포함된 이미지 파일이 없습니다.")

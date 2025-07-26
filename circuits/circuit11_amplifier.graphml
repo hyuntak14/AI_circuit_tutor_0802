@@ -1,0 +1,68 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d4" for="edge" attr.name="target_pin" attr.type="string"/>
+<key id="d3" for="edge" attr.name="source_pin" attr.type="string"/>
+<key id="d2" for="node" attr.name="model" attr.type="string"/>
+<key id="d1" for="node" attr.name="value" attr.type="double"/>
+<key id="d0" for="node" attr.name="type" attr.type="string"/>
+<graph edgedefault="directed"><node id="V1">
+  <data key="d0">VoltageSource</data>
+  <data key="d1">0.2</data>
+</node>
+<node id="V2">
+  <data key="d0">VoltageSource</data>
+  <data key="d1">12.0</data>
+</node>
+<node id="V3">
+  <data key="d0">VoltageSource</data>
+  <data key="d1">12.0</data>
+</node>
+<node id="R4">
+  <data key="d0">Resistor</data>
+  <data key="d1">5100.0</data>
+</node>
+<node id="R5">
+  <data key="d0">Resistor</data>
+  <data key="d1">10000.0</data>
+</node>
+<node id="I6">
+  <data key="d0">IC</data>
+  <data key="d1">0.0</data>
+  <data key="d2">ua741</data>
+</node>
+<edge source="V1" target="R4">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+<edge source="V1" target="I6">
+  <data key="d3"></data>
+  <data key="d4">3</data>
+</edge>
+<edge source="V2" target="R4">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+<edge source="V2" target="V3">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+<edge source="V2" target="V1">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+<edge source="R4" target="I6">
+  <data key="d3"></data>
+  <data key="d4">2</data>
+</edge>
+<edge source="R4" target="R5">
+  <data key="d3"></data>
+  <data key="d4"></data>
+</edge>
+<edge source="R5" target="I6">
+  <data key="d3"></data>
+  <data key="d4">6</data>
+</edge>
+<edge source="I6" target="V3">
+  <data key="d3">7</data>
+  <data key="d4"></data>
+</edge>
+</graph></graphml>

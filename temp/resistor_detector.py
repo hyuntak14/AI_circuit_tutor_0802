@@ -233,3 +233,5 @@ class ResistorEndpointDetector:
         if endpoints:
             cv2.circle(image, endpoints[0], radius, color, thickness)
             cv2.circle(image, endpoints[1], radius, color, thickness)
+
+
