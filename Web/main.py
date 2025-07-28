@@ -1,11 +1,12 @@
-# main.py - 메인 애플리케이션 파일
+# main.py - 메인 애플리케이션 파일 (드래그 기능 업데이트)
 import dash
 from dash import html, dcc
 import dash_bootstrap_components as dbc
-from flask import Flask
+from flask import Flask, Response  # Response를 추가로 import 합니다.
 import socket
 import sys
 import os
+import requests
 
 # 현재 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -14,6 +15,7 @@ try:
     from state_manager import app_state
     from components.login import login_layout
     from components.upload import create_main_layout
+    from components.component_detect import create_component_edit_modal, create_add_component_modal
     from callbacks import register_all_callbacks
 except ImportError as e:
     print(f"Import 오류: {e}")
@@ -49,11 +51,28 @@ app.layout = html.Div([
     dcc.Store(id='component-result-store', data={}),
     dcc.Store(id='pin-result-store', data={}),
     dcc.Interval(id='progress-interval', interval=2000, disabled=True),
-    html.Div(id='page-content')
+    html.Div(id='page-content'),
+    
+    # 컴포넌트 편집/추가 모달들
+    create_component_edit_modal(),
+    create_add_component_modal()
 ])
 
 # 모든 콜백 등록
 register_all_callbacks(app)
+
+@server.after_request
+def apply_csp(response: Response):
+    if app.server.debug:
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdn.jsdelivr.net https://use.fontawesome.com; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://use.fontawesome.com; "
+            "font-src 'self' https://fonts.gstatic.com https://use.fontawesome.com; "
+            "img-src 'self' data: https://cdn.jsdelivr.net https://use.fontawesome.com;"
+        )
+    return response
+
 
 def get_local_ip():
     """로컬 IP 주소 가져오기"""
@@ -67,9 +86,19 @@ def get_local_ip():
         s.close()
     return IP
 
+
+#공인 ip : 220.68.82.134
+def get_public_ip():
+    try:
+        response = requests.get('https://api.ipify.org?format=json')
+        return response.json()['ip']
+    except:
+        return "IP 확인 실패"
+
+
 if __name__ == '__main__':
-    local_ip = get_local_ip()
+    local_ip = get_public_ip()
     print(f"🚀 회로 분석 AI 서버 시작")
-    print(f"📱 모바일 접속: http://{local_ip}:8050")
+    print(f"📱 모바일 접속: http://{local_ip}:20008")
     print(f"💻 PC 접속: http://localhost:8050")
     app.run(debug=True, host='0.0.0.0', port=8050)

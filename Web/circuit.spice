@@ -1,8 +1,6 @@
 * Auto-generated circuit
 .title Simple Circuit Analysis
 V1 1 0 5V
-R3 1 2 100
-R4 1 2 100
 
 .model LED_MODEL D(IS=1e-12 N=2)
 .end

@@ -1,4 +1,4 @@
-# config.py - 설정 및 상수 정의
+# config.py - 설정 및 상수 정의 (강화된 버전)
 import dash_bootstrap_components as dbc
 
 # 유효 사용자 계정
@@ -7,6 +7,34 @@ VALID_USERS = {'user1': 'pass1', 'user2': 'pass2'}
 # 스타일 상수
 CARD_STYLE = {'marginBottom': '1rem', 'boxShadow': '0 2px 4px rgba(0,0,0,0.1)'}
 BUTTON_STYLE = {'marginBottom': '0.5rem'}
+
+# 컴포넌트 타입 목록
+COMPONENT_TYPES = [
+    'Resistor',      # 저항
+    'Capacitor',     # 캐패시터
+    'IC',            # 집적회로
+    'LED',           # LED
+    'Switch',        # 스위치
+    'Battery',       # 배터리
+    'Wire',          # 와이어
+    'Transistor',    # 트랜지스터
+    'Diode',         # 다이오드
+    'Inductor'       # 인덕터
+]
+
+# 컴포넌트 타입별 색상 (시각화용)
+COMPONENT_COLORS = {
+    'Resistor': '#FF6B6B',      # 빨간색
+    'Capacitor': '#4ECDC4',     # 청록색
+    'IC': '#45B7D1',            # 파란색
+    'LED': '#96CEB4',           # 연두색
+    'Switch': '#FFEAA7',        # 노란색
+    'Battery': '#DDA0DD',       # 자주색
+    'Wire': '#98D8C8',          # 민트색
+    'Transistor': '#F7DC6F',    # 황금색
+    'Diode': '#BB8FCE',         # 라벤더색
+    'Inductor': '#F8C471'       # 주황색
+}
 
 # 회로 주제 목록
 CIRCUIT_TOPICS = {
@@ -28,7 +56,6 @@ CIRCUIT_TOPICS = {
 def get_dash_config(server):
     """Dash 앱 설정 반환"""
     return {
-        '__name__': '__main__',
         'server': server,
         'external_stylesheets': [dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME],
         'suppress_callback_exceptions': True,
