@@ -1088,7 +1088,7 @@ def get_local_ip():
         s.close()
     return IP
 
-if __name__ == '__main__':
+if __name__ == '__main__': 
     local_ip = get_local_ip()
     print(f"🚀 회로 분석 AI 서버 시작")
     print(f"📱 모바일 접속: http://{local_ip}:8050")
