@@ -39,6 +39,8 @@ app = dash.Dash(
 )
 
 # 앱 레이아웃
+# main.py의 app.layout 부분을 다음과 같이 수정하세요:
+
 app.layout = html.Div([
     dcc.Store(id='login-state', data={'logged_in': False}),
     dcc.Store(id='session-store', data={}),
@@ -50,6 +52,11 @@ app.layout = html.Div([
     dcc.Store(id='upload-result-store', data={}),
     dcc.Store(id='component-result-store', data={}),
     dcc.Store(id='pin-result-store', data={}),
+    dcc.Store(id='chat-messages-store', data=[]),  # 추가
+    dcc.Store(id='rag-context-store', data={}),     # 추가
+    dcc.Store(id='components-store', data={}),      # 추가
+    dcc.Store(id='drag-selection-store', data={}),  # 추가
+    dcc.Store(id='drag-mode-active', data=False),   # 추가
     dcc.Interval(id='progress-interval', interval=2000, disabled=True),
     html.Div(id='page-content'),
     

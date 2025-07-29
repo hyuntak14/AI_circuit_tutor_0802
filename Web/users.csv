@@ -1,0 +1,6 @@
+user_id,password,name,email,role
+user1,pass1,김철수,user1@example.com,student
+user2,pass2,이영희,user2@example.com,student
+admin,admin123,관리자,admin@example.com,admin
+test001,test123,테스트사용자1,test1@example.com,student
+test002,test456,테스트사용자2,test2@example.com,student
