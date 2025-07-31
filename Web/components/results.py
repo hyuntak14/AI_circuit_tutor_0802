@@ -49,7 +49,20 @@ def create_result_section(result):
                 ])
             ]),
             
-            dbc.Button('새로운 분석 시작', id='restart-analysis', 
-                      color='outline-secondary', className='w-100 mt-3')
+            # 1단계부터 순차 재시작 버튼 추가
+            dbc.Button(
+                '1단계부터 다시 진행',
+                id='restart-from-step1',
+                color='primary',
+                className='w-100 mt-2'
+            ),
+
+            # 기존: 채팅 모드 재시작 버튼
+            dbc.Button(
+                '새로운 분석 시작',
+                id='restart-analysis',
+                color='outline-secondary',
+                className='w-100 mt-3'
+            )
         ])
     ], style=CARD_STYLE)

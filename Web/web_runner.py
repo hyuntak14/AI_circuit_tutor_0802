@@ -8,6 +8,7 @@ import tempfile
 import json
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
+from gemini_test_rag import create_rag_prompt, initialize_gemini  # ➊ 
 
 # 더미 검출기 클래스들 (모델 파일이 없을 때 사용)
 class DummyDetector:
@@ -96,7 +97,14 @@ class WebRunnerComplete:
         self.logs = []
         self.progress = 0
         self.current_step = 0
-        
+        self.model = None
+        self.generation_config = None
+
+        try:
+            self.model, self.generation_config = initialize_gemini()
+            self._log("✅ Gemini 모델 초기화 완료")
+        except Exception as e:
+            self._log(f"⚠️ Gemini 초기화 실패: {e}")
         # 기본 설정
         self.display_size = (1200, 1200)
         
@@ -867,204 +875,39 @@ V1 1 0 {voltage}V
             self._log(f"간단한 회로 생성 오류: {e}")
             return False, {}
     
-    def _generate_analysis_text(self, component_pins, feedback_data, reference_circuit):
-        """AI 분석 텍스트 생성"""
-        try:
-            # 회로 주제 매핑
-            circuit_topics = {
-                1: "병렬회로", 2: "직렬회로", 3: "키르히호프 1법칙", 4: "키르히호프 2법칙",
-                5: "중첩의 원리-a", 6: "중첩의 원리-b", 7: "중첩의 원리-c", 8: "교류 전원", 
-                9: "오실로스코프1", 10: "반파정류회로", 11: "반파정류회로2", 12: "비반전 증폭기"
-            }
-            
-            # 컴포넌트 요약
-            comp_summary = {}
-            for comp in component_pins:
-                cls = comp['class']
-                comp_summary[cls] = comp_summary.get(cls, 0) + 1
-            
-            # 기본 분석 텍스트
-            analysis = f"""🔌 회로 분석 결과
+    def _generate_analysis_text(self, component_pins, feedback_data, reference_circuit):  
+        """  
+        Gemini LLM에 create_rag_prompt 형식의 프롬프트를 보내서  
+        AI 분석 텍스트를 그대로 받아 반환합니다.  
+        """  
+        try:  
+            # 1) feedback_data를 사람이 읽기 좋은 문자열로 포맷  
+            from llm_feedback_manager import LLMFeedbackManager  
+            manager = LLMFeedbackManager(practice_circuit_topic="")  
+            context = manager._format_analysis_context(feedback_data)  # :contentReference[oaicite:4]{index=4}  
+  
+            # 2) RAG 프롬프트 생성 (첫 턴 고정)  
+            prompt = create_rag_prompt(  
+                user_query="",  
+                context=context,  
+                is_first_turn=True,  
+                practice_circuit_topic=""  
+            )  # :contentReference[oaicite:5]{index=5}  
+  
+            # 3) 모델이 미초기화 상태면 다시 초기화  
+            if not self.model or not self.generation_config:  
+                self.model, self.generation_config = initialize_gemini()  
+  
+            # 4) Gemini 호출  
+            response = self.model.generate_content(  
+                prompt,  
+                generation_config=self.generation_config  
+            )  
+            return response.text  
+        except Exception as e:  
+            self._log(f"❌ 분석 텍스트 생성 오류: {e}")  
+            return f"분석 텍스트 생성 중 오류 발생: {str(e)}" 
 
-📊 **검출된 컴포넌트**
-"""
-            
-            for cls, count in comp_summary.items():
-                analysis += f"- {cls}: {count}개\n"
-            
-            # 핀 검출 정보 추가
-            total_pins = sum(len(comp.get('pins', [])) for comp in component_pins)
-            analysis += f"\n📍 **핀 검출 정보**\n"
-            analysis += f"- 총 검출된 핀: {total_pins}개\n"
-            analysis += f"- 스마트 구멍 스냅 적용: ✅\n"
-            
-            analysis += f"""
-⚡ **전원 정보**
-- 공급 전압: {feedback_data.get('voltage', 5.0)}V
-- 전원 개수: {feedback_data.get('power_count', 1)}개
-
-🔍 **회로 분석**
-"""
-            
-            # 기준 회로 비교
-            if reference_circuit != 'skip':
-                circuit_name = circuit_topics.get(reference_circuit, f"회로 {reference_circuit}")
-                similarity = feedback_data.get('similarity_score', 0.8)
-                analysis += f"- 기준 회로: {circuit_name}\n"
-                analysis += f"- 기준 회로와의 유사도: {similarity:.1%}\n"
-                
-                if similarity > 0.8:
-                    analysis += "- ✅ 기준 회로와 매우 유사한 구조입니다.\n"
-                elif similarity > 0.6:
-                    analysis += "- ⚠️ 기준 회로와 유사하지만 일부 차이가 있습니다.\n"
-                else:
-                    analysis += "- ❌ 기준 회로와 상당한 차이가 있습니다.\n"
-            
-            # 오류 및 경고
-            errors = feedback_data.get('errors', [])
-            warnings = feedback_data.get('warnings', [])
-            
-            if errors:
-                analysis += "\n❌ **발견된 오류**\n"
-                for error in errors[:3]:  # 최대 3개만 표시
-                    analysis += f"- {error}\n"
-            
-            if warnings:
-                analysis += "\n⚠️ **주의사항**\n"
-                for warning in warnings[:3]:  # 최대 3개만 표시
-                    analysis += f"- {warning}\n"
-            
-            # 회로 특성 분석
-            analysis += f"""
-🧮 **회로 특성**
-- 총 노드 수: 추정 {len(component_pins) + 2}개
-- 회로 복잡도: {'높음' if len(component_pins) > 5 else '보통' if len(component_pins) > 2 else '낮음'}
-- 분석 신뢰도: {feedback_data.get('similarity_score', 0.8):.1%}
-
-💬 **추가 질문하기**
-궁금한 점이 있으시면 아래 채팅창에서 질문해주세요!
-- "이 회로의 동작 원리는?"
-- "전류는 얼마나 흐르나요?"
-- "개선할 점이 있나요?"
-"""
-            
-            return analysis
-            
-        except Exception as e:
-            return f"분석 텍스트 생성 중 오류 발생: {str(e)}"
-    
-    def get_ai_response(self, question, analysis_data):
-        """
-        사용자 질문에 대한 AI 응답 생성
-        
-        Args:
-            question: 사용자 질문
-            analysis_data: 분석 결과 데이터
-            
-        Returns:
-            str: AI 응답
-        """
-        try:
-            # LLM 매니저 초기화 시도
-            if self.llm_manager is None:
-                try:
-                    if LLMFeedbackManager != type:
-                        self.llm_manager = LLMFeedbackManager(
-                            practice_circuit_topic="web_analysis"
-                        )
-                except Exception as e:
-                    self._log(f"LLM 매니저 초기화 실패: {e}")
-            
-            # LLM 사용 가능한 경우
-            if self.llm_manager and hasattr(self.llm_manager, 'get_chat_response'):
-                try:
-                    response = self.llm_manager.get_chat_response(
-                        question, analysis_data
-                    )
-                    return response
-                except Exception as e:
-                    self._log(f"LLM 응답 생성 오류: {e}")
-            
-            # Fallback: 규칙 기반 응답
-            return self._generate_rule_based_response(question, analysis_data)
-            
-        except Exception as e:
-            return f"응답 생성 중 오류가 발생했습니다: {str(e)}"
-    
-    def _generate_rule_based_response(self, question, analysis_data):
-        """규칙 기반 간단한 응답 생성"""
-        question_lower = question.lower()
-        
-        # 키워드 기반 응답
-        if any(word in question_lower for word in ['동작', '원리', '작동']):
-            return """이 회로의 기본 동작 원리는 다음과 같습니다:
-
-1. 전원에서 전류가 공급됩니다
-2. 저항을 통해 전류가 제한됩니다  
-3. LED나 다른 부품들이 동작합니다
-4. 전류는 접지로 돌아갑니다
-
-더 구체적인 분석을 원하시면 회로의 특정 부분에 대해 질문해주세요."""
-
-        elif any(word in question_lower for word in ['전류', '전압', '값']):
-            voltage = analysis_data.get('voltage', 5.0)
-            return f"""현재 설정된 전압은 {voltage}V입니다.
-
-전류 계산 예시:
-- 저항이 100Ω인 경우: I = V/R = {voltage}/100 = {voltage/100:.2f}A
-- LED 순방향 전압을 2V로 가정하면 저항에 걸리는 전압은 {voltage-2}V입니다
-
-정확한 계산을 위해서는 각 컴포넌트의 정확한 값이 필요합니다."""
-
-        elif any(word in question_lower for word in ['핀', '검출', '연결']):
-            return """핀 검출 결과에 대한 정보:
-
-✅ **개선된 핀 검출 시스템**
-- 실제 PinManager를 사용한 정밀 검출
-- 브레드보드 구멍 위치에 자동 스냅
-- 컴포넌트별 맞춤형 핀 검출 알고리즘
-
-🔍 **핀 검출 과정**
-1. 구멍 패턴 분석
-2. 컴포넌트별 특성 고려한 핀 위치 예측
-3. 가장 가까운 구멍에 스냅
-4. 검출 결과 시각화
-
-파란 점으로 표시된 핀 위치가 최종 검출 결과입니다."""
-
-        elif any(word in question_lower for word in ['개선', '문제', '오류']):
-            return """회로 개선 제안사항:
-
-1. 컴포넌트 값 확인 - 모든 저항값과 캐패시터값이 올바른지 확인하세요
-2. 연결 상태 점검 - 모든 핀이 올바르게 연결되어 있는지 확인하세요  
-3. 전원 전압 검토 - 사용하는 부품의 정격 전압에 맞는지 확인하세요
-4. 안전 저항 추가 - LED 등에는 전류 제한 저항이 필요합니다
-
-구체적인 문제가 있다면 자세히 알려주세요."""
-
-        elif any(word in question_lower for word in ['help', '도움', '사용법']):
-            return """회로 분석기 사용법:
-
-1. 브레드보드 이미지를 선명하게 촬영하세요
-2. 컴포넌트가 잘 보이도록 조명을 충분히 하세요
-3. 각 단계에서 결과를 확인하고 필요시 수정하세요
-4. 궁금한 점은 언제든지 채팅으로 질문하세요
-
-지원하는 컴포넌트: 저항, LED, 다이오드, 캐패시터, IC"""
-
-        else:
-            return f""""{question}"에 대한 답변:
-
-죄송하지만 해당 질문에 대한 구체적인 답변을 생성할 수 없습니다. 
-
-다음과 같은 질문을 시도해보세요:
-- 이 회로의 동작 원리는 무엇인가요?
-- 전류값은 얼마나 될까요?
-- 회로에 문제가 있나요?
-- 핀 검출은 어떻게 작동하나요?
-- 어떻게 개선할 수 있나요?
-
-더 구체적인 질문을 해주시면 더 도움이 될 답변을 드릴 수 있습니다."""
     
     def get_session_info(self):
         """현재 세션 정보 반환"""

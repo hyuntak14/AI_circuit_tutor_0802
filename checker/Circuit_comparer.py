@@ -1,143 +1,131 @@
+import matplotlib.pyplot as plt
 import networkx as nx
 from collections import Counter, deque
-import matplotlib.pyplot as plt
 
 class CircuitComparer:
-    def __init__(self, graph1: nx.Graph, graph2: nx.Graph, debug=False):
-        self.G1 = graph1
-        self.G2 = graph2
+    def __init__(self, generated_graph, reference_graph, debug=False):
+        """
+        :param generated_graph: networkx.Graph containing edges with 'component' dicts
+        :param reference_graph: networkx.Graph to compare against
+        :param debug: bool, if True prints internal matching information
+        """
         self.debug = debug
+        # Extract and normalize components, excluding junctions
+        self.components = self._extract_components(generated_graph)
+        self.other_components = self._extract_components(reference_graph)
+        # Build internal graphs without junctions
+        self.graph = self._build_graph(self.components)
+        self.other_graph = self._build_graph(self.other_components)
+
+    def _extract_components(self, graph):
+        comps = []
+        for u, v, data in graph.edges(data=True):
+            comp = data.get('component')
+            if not isinstance(comp, dict):
+                continue
+            raw = comp.get('comp_class') or comp.get('type')
+            norm = self.normalize_component_class(raw)
+            if norm == 'Junction':
+                continue
+            comp_copy = comp.copy()
+            comp_copy['norm_class'] = norm
+            comp_copy['nodes'] = (u, v)
+            comps.append(comp_copy)
+        return comps
 
     def normalize_component_class(self, cls):
-        """컴포넌트 클래스 이름을 정규화"""
-        if not cls:
-            return 'Unknown'
-        # VoltageSource 관련 정규화
-        if cls in ['VoltageSource', 'V+', 'V-']:
+        if cls in ('V+', 'V-', 'VoltageSource'):
             return 'VoltageSource'
-        cls_map = {
-            'Unknown': 'Unknown',
-            'Resistor': 'Resistor',
-            'Capacitor': 'Capacitor',
-            'Diode': 'Diode',
-            'LED': 'LED',
-            'IC': 'IC',
-            'Line_area': 'Wire',
-            'Wire': 'Wire'
-        }
-        return cls_map.get(cls, cls)
+        if 'Resistor' in cls:
+            return 'Resistor'
+        if cls in ('Wire', 'net', 'junction', 'Junction'):
+            return 'Junction'
+        return cls
+
+    def _build_graph(self, components):
+        G = nx.Graph()
+        for comp in components:
+            n1, n2 = comp['nodes']
+            G.add_edge(n1, n2, component=comp)
+        return G
 
     def node_match_score(self):
-        """노드(컴포넌트) 매칭 점수 계산"""
-        cls1 = [
-            self.normalize_component_class(
-                data.get('comp_class') or data.get('type') or 'Unknown'
-            )
-            for _, data in self.G1.nodes(data=True)
-        ]
-        cls2 = [
-            self.normalize_component_class(
-                data.get('comp_class') or data.get('type') or 'Unknown'
-            )
-            for _, data in self.G2.nodes(data=True)
-        ]
-        c1, c2 = Counter(cls1), Counter(cls2)
+        cnt1 = Counter(c['norm_class'] for c in self.components)
+        cnt2 = Counter(c['norm_class'] for c in self.other_components)
+        inter = sum((cnt1 & cnt2).values())
+        union = sum((cnt1 | cnt2).values())
+        score = inter / union if union else 1.0
         if self.debug:
-            print("\n=== Node Matching Debug ===")
-            print(f"Graph1 components: {dict(c1)}")
-            print(f"Graph2 components: {dict(c2)}")
-            for k in sorted(set(c1) | set(c2)):
-                match = min(c1.get(k,0), c2.get(k,0))
-                total = max(c1.get(k,0), c2.get(k,0))
-                ratio = match/total if total>0 else 0
-                print(f"  {k}: {match}/{total} = {ratio:.3f}")
-        all_classes = set(c1.keys()) | set(c2.keys())
-        intersection = sum(min(c1.get(k,0), c2.get(k,0)) for k in all_classes)
-        union = sum(max(c1.get(k,0), c2.get(k,0)) for k in all_classes)
-        return intersection/union if union>0 else 1.0
+            print(f"Node match: inter={inter}, union={union}, score={score}")
+        return score
 
     def edge_match_score(self):
-        """엣지(연결) 매칭 점수 계산"""
-        def norm_cls(node, G):
-            cls = G.nodes[node].get('comp_class') or G.nodes[node].get('type') or 'Unknown'
-            return self.normalize_component_class(cls)
-        pairs1 = [tuple(sorted((norm_cls(u,self.G1), norm_cls(v,self.G1)))) for u,v in self.G1.edges()]
-        pairs2 = [tuple(sorted((norm_cls(u,self.G2), norm_cls(v,self.G2)))) for u,v in self.G2.edges()]
-        c1, c2 = Counter(pairs1), Counter(pairs2)
-        if self.debug:
-            print("\n=== Edge Matching Debug ===")
-            print(f"Graph1 connections: {dict(c1)}")
-            print(f"Graph2 connections: {dict(c2)}")
-            for p in sorted(set(c1)|set(c2)):
-                match = min(c1.get(p,0), c2.get(p,0))
-                total = max(c1.get(p,0), c2.get(p,0))
-                ratio = match/total if total>0 else 0
-                print(f"  {p}: {match}/{total} = {ratio:.3f}")
-        all_pairs = set(c1.keys()) | set(c2.keys())
-        intersection = sum(min(c1.get(p,0), c2.get(p,0)) for p in all_pairs)
-        union = sum(max(c1.get(p,0), c2.get(p,0)) for p in all_pairs)
-        return intersection/union if union>0 else 1.0
+        def edge_types(comps):
+            types = []
+            for comp in comps:
+                cls = comp['norm_class']
+                types.append((cls, cls))
+            return types
 
-    def bfs_traversal_sequence(self, G):
-        """Voltage source부터 BFS 순회하며 부품 클래스 순서를 반환"""
-        # 시작 노드: VoltageSource
-        start_nodes = [n for n,d in G.nodes(data=True)
-                       if self.normalize_component_class(d.get('comp_class') or d.get('type') or '')=='VoltageSource']
-        if not start_nodes:
-            start_nodes = [next(iter(G.nodes()), None)]
-        visited = set()
+        et1 = Counter(edge_types(self.components))
+        et2 = Counter(edge_types(self.other_components))
+        inter = sum((et1 & et2).values())
+        union = sum((et1 | et2).values())
+        score = inter / union if union else 1.0
+        if self.debug:
+            print(f"Edge match: inter={inter}, union={union}, score={score}")
+        return score
+
+    def bfs_traversal_sequence(self, graph=None, components=None, start_class='VoltageSource'):
+        if graph is None or components is None:
+            graph = self.graph
+            components = self.components
         seq = []
-        for start in start_nodes:
-            if start is None: continue
-            queue = deque([start])
-            visited.add(start)
-            while queue:
-                node = queue.popleft()
-                comp_type = self.normalize_component_class(
-                    G.nodes[node].get('comp_class') or G.nodes[node].get('type') or '')
-                seq.append(comp_type)
-                for nbr in sorted(G.neighbors(node)):
-                    if nbr not in visited:
-                        visited.add(nbr)
-                        queue.append(nbr)
+        start_nodes = [n for comp in components if comp['norm_class'] == start_class for n in comp['nodes']]
+        if not start_nodes:
+            return seq
+        visited = set()
+        queue = deque([start_nodes[0]])
+        while queue:
+            node = queue.popleft()
+            if node in visited:
+                continue
+            visited.add(node)
+            for nbr in graph.neighbors(node):
+                comp = graph.edges[node, nbr]['component']
+                cls = comp['norm_class']
+                seq.append(cls)
+                queue.append(nbr)
         if self.debug:
             print(f"BFS sequence: {seq}")
         return seq
 
     def sequence_similarity(self, seq1, seq2):
-        """LCS 기반 시퀀스 유사도 계산"""
         m, n = len(seq1), len(seq2)
-        dp = [[0]*(n+1) for _ in range(m+1)]
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
         for i in range(m):
             for j in range(n):
-                if seq1[i]==seq2[j]:
-                    dp[i+1][j+1] = dp[i][j]+1
+                if seq1[i] == seq2[j]:
+                    dp[i + 1][j + 1] = dp[i][j] + 1
                 else:
-                    dp[i+1][j+1] = max(dp[i][j+1], dp[i+1][j])
+                    dp[i + 1][j + 1] = max(dp[i][j + 1], dp[i + 1][j])
         lcs = dp[m][n]
-        return lcs/max(m,n) if max(m,n)>0 else 1.0
-
-    def traversal_match_score(self):
-        """BFS 순회 시퀀스 간 매칭 점수"""
-        seq1 = self.bfs_traversal_sequence(self.G1)
-        seq2 = self.bfs_traversal_sequence(self.G2)
-        score = self.sequence_similarity(seq1, seq2)
+        score = lcs / max(m, n) if max(m, n) else 1.0
         if self.debug:
-            print(f"Sequence similarity: {score:.3f}")
+            print(f"LCS length={lcs}, len1={m}, len2={n}, score={score}")
         return score
 
-    def compute_similarity(self, alpha=0.3, beta=0.3, gamma=0.4):
-        """노드, 엣지, BFS 시퀀스 가중치 결합 최종 유사도"""
+    def compute_similarity(self):
         ns = self.node_match_score()
         es = self.edge_match_score()
-        ts = self.traversal_match_score()
-        sim = alpha*ns + beta*es + gamma*ts
+        seq1 = self.bfs_traversal_sequence()
+        seq2 = self.bfs_traversal_sequence(self.other_graph, self.other_components)
+        ts = self.sequence_similarity(seq1, seq2)
+        sim = 0.3 * ns + 0.3 * es + 0.4 * ts
         if self.debug:
-            print("\n=== Final Similarity Debug ===")
-            print(f"Node score: {ns:.3f}, Edge score: {es:.3f}, Sequence score: {ts:.3f}")
-            print(f"Weights: alpha={alpha}, beta={beta}, gamma={gamma}")
-            print(f"Overall similarity: {sim:.3f}")
+            print(f"NS={ns}, ES={es}, TS={ts}, SIM={sim}")
         return sim
+
 
     def visualize_comparison(self, save_path=None, show=True):
         """두 그래프를 나란히 시각화하여 비교"""

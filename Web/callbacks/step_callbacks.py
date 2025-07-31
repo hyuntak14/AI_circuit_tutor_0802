@@ -70,11 +70,11 @@ def register_step_callbacks(app):
                 'content': f'이미지 업로드: {filename}',
                 'time': datetime.now().strftime('%H:%M')
             })
-            messages.append({
-                'type': 'ai',
-                'content': '이미지가 성공적으로 업로드되었습니다. 이제 기준 회로를 선택해주세요.',
-                'time': datetime.now().strftime('%H:%M')
-            })
+            #messages.append({
+            #    'type': 'ai',
+            #    'content': '이미지가 성공적으로 업로드되었습니다. 이제 기준 회로를 선택해주세요.',
+            #    'time': datetime.now().strftime('%H:%M')
+            #})
             
             # 2단계 UI로 전환
             return create_reference_section(), PROGRESS_STEPS[2], STEP_MESSAGES[2], 2, messages
@@ -159,18 +159,22 @@ def register_step_callbacks(app):
          Output('progress-bar', 'value', allow_duplicate=True),
          Output('step-info', 'children', allow_duplicate=True),
          Output('current-step', 'data', allow_duplicate=True),
-         Output('rag-context-store', 'data')],
+         Output('rag-context-store', 'data'),
+         Output('chat-messages-store', 'data',allow_duplicate=True)],  # ➊ 추가
         Input('start-circuit-generation', 'n_clicks'),
         State('power-voltage', 'value'),
+        State('chat-messages-store', 'data'),     # ➋ 기존 메시지 가져오기
         prevent_initial_call=True
     )
-    def start_circuit_generation(n_clicks, voltage):
+    def start_circuit_generation(n_clicks, voltage, messages):
         if not n_clicks:
-            return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+            return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+         
         
         session = get_current_session()
         if not session:
-            return dbc.Alert('세션 만료', color='danger'), 0, '오류', 6, {}
+            return dbc.Alert('세션 만료', color='danger'), 0, '오류', 6, {}, dash.no_update
+         
         
         try:
             runner = session['runner']
@@ -193,13 +197,24 @@ def register_step_callbacks(app):
             }
             
             # 채팅 UI로 전환하면서 분석 결과 표시
-            chat_ui = create_final_chat_interface(result.get('analysis_text', ''))
-            
-            return chat_ui, PROGRESS_STEPS[7], STEP_MESSAGES[7], 7, rag_context
+            # ----------------------------------------------------------
+            # ➌ AI 분석 텍스트(chat messages)에 추가
+            analysis_text = result.get('analysis_text', '')
+            if messages is None:
+                messages = []
+            messages.append({
+                'type': 'ai',
+                'content': analysis_text,
+                'time': datetime.now().strftime('%H:%M')
+            })
+
+            # ➍ 채팅 UI로 전환
+            chat_ui = create_final_chat_interface(analysis_text)
+            return chat_ui, PROGRESS_STEPS[7], STEP_MESSAGES[7], 7, rag_context, messages
             
         except Exception as e:
-            return (dbc.Alert(f'회로 생성 오류: {str(e)}', color='danger'), 
-                    PROGRESS_STEPS[6], '오류 발생', 6, {})
+            return (dbc.Alert(f'회로 생성 오류: {str(e)}', color='danger'),
+                    PROGRESS_STEPS[6], '오류 발생', 6, {}, dash.no_update)
 
     # ===== 나머지 콜백들은 기존과 동일 =====
     # (컴포넌트 편집, 삭제, 핀 검출 등의 콜백은 그대로 유지)

@@ -79,16 +79,19 @@ class ErrorChecker:
 
     def detect_floating_components(self):
         """
-        소자 또는 와이어가 다른 어떤 소자/와이어와도 전기적으로 연결되지 않은 경우 검출
-        → 그래프에서 edge(=component) 양 끝 노드의 degree가 모두 1일 때(자기 자신만) 떠다니는 것으로 간주
+        소자 또는 와이어가 다른 소자/와이어와 전기적으로 연결되지 않은 경우 검출
+        → 연결 요소 중 엣지가 하나뿐인 경우 해당 소자가 고립된 floating component임을 간주
         """
         errors = []
-        for comp in self.components:
-            n1, n2 = comp['nodes']
-            # 양끝 노드의 그래프 차수가 모두 1이면 이 comp만 연결된 것
-            if self.graph.degree(n1) == 1 and self.graph.degree(n2) == 1:
+        for cc in nx.connected_components(self.graph):
+            sub = self.graph.subgraph(cc)
+            if sub.number_of_edges() == 1:
+                u, v, data = next(sub.edges(data=True))
+                comp = data.get('component', {})
+                name = comp.get('name')
+                cls = comp.get('class')
                 errors.append(
-                    f"Floating component: {comp['name']} ({comp.get('class')}) is not connected to any other component or wire"
+                    f"Floating component: {name} ({cls}) is not connected to any other component or wire"
                 )
         return errors
 

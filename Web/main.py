@@ -68,6 +68,7 @@ app.layout = html.Div([
 # 모든 콜백 등록
 register_all_callbacks(app)
 
+
 @server.after_request
 def apply_csp(response: Response):
     if app.server.debug:
