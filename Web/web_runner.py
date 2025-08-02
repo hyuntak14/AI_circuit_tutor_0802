@@ -8,7 +8,10 @@ import tempfile
 import json
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
-from gemini_test_rag import create_rag_prompt, initialize_gemini  # ➊ 
+from gemini_test_rag import create_rag_prompt, initialize_gemini  # ➊
+
+# 표준 브레드보드 이미지 크기
+BOARD_SIZE = 640
 
 # 더미 검출기 클래스들 (모델 파일이 없을 때 사용)
 class DummyDetector:
@@ -106,7 +109,7 @@ class WebRunnerComplete:
         except Exception as e:
             self._log(f"⚠️ Gemini 초기화 실패: {e}")
         # 기본 설정
-        self.display_size = (1200, 1200)
+        self.display_size = (BOARD_SIZE, BOARD_SIZE)
         
         # 모델 파일 경로 자동 탐지
         model_paths = [
@@ -423,14 +426,16 @@ class WebRunnerComplete:
         """검출기가 없을 때 전체 이미지를 브레드보드로 사용"""
         try:
             h, w = img.shape[:2]
-            
-            # 전체 이미지를 표준 크기로 리사이즈
-            warped = cv2.resize(img, self.display_size, interpolation=cv2.INTER_LINEAR)
+
+            pts_src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+            pts_dst = np.float32([[0, 0], [BOARD_SIZE, 0], [BOARD_SIZE, BOARD_SIZE], [0, BOARD_SIZE]])
+            matrix = cv2.getPerspectiveTransform(pts_src, pts_dst)
+            warped = cv2.warpPerspective(img, matrix, (BOARD_SIZE, BOARD_SIZE))
             bb = (0, 0, w, h)
-            
+
             self._log("✅ 전체 이미지를 브레드보드로 설정")
             return warped, bb
-            
+
         except Exception as e:
             self._log(f"이미지 처리 오류: {e}")
             return None
@@ -440,28 +445,26 @@ class WebRunnerComplete:
         try:
             # FasterRCNN으로 브레드보드 검출
             detections = self.detector.detect(img)
-            breadboard_boxes = [box for cls, conf, box in detections 
+            breadboard_boxes = [box for cls, conf, box in detections
                               if cls.lower() == 'breadboard' and conf > 0.5]
-            
+
             if not breadboard_boxes:
-                # 전체 이미지를 브레드보드로 간주
                 h, w = img.shape[:2]
                 bb = (0, 0, w, h)
                 self._log("⚠️ 브레드보드 자동 검출 실패, 전체 이미지 사용")
             else:
-                # 가장 큰 브레드보드 선택
                 bb = max(breadboard_boxes, key=lambda x: (x[2]-x[0])*(x[3]-x[1]))
                 self._log("✅ 브레드보드 자동 검출 성공")
-            
-            # 간단한 perspective transform (크롭 + 리사이즈)
+
             x1, y1, x2, y2 = bb
-            cropped = img[y1:y2, x1:x2]
-            
-            # 표준 크기로 리사이즈
-            warped = cv2.resize(cropped, self.display_size, interpolation=cv2.INTER_LINEAR)
-            
+            pts_src = np.float32([[x1, y1], [x2, y1], [x2, y2], [x1, y2]])
+            pts_dst = np.float32([[0, 0], [BOARD_SIZE, 0], [BOARD_SIZE, BOARD_SIZE], [0, BOARD_SIZE]])
+            matrix = cv2.getPerspectiveTransform(pts_src, pts_dst)
+            warped = cv2.warpPerspective(img, matrix, (BOARD_SIZE, BOARD_SIZE))
+            self.warped_image = warped
+
             return warped, bb
-            
+
         except Exception as e:
             self._log(f"브레드보드 변환 오류: {e}")
             return None
